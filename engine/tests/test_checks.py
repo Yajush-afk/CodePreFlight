@@ -23,11 +23,11 @@ def test_runs_checks_concurrently_and_keeps_recommendations_distinct(tmp_path: P
     definitions = [
         CheckDefinition(
             name="slow-one",
-            command=["python", "-c", "import time; time.sleep(0.2)"],
+            command=["python", "-c", "import time; time.sleep(0.4)"],
         ),
         CheckDefinition(
             name="slow-two",
-            command=["python", "-c", "import time; time.sleep(0.2)"],
+            command=["python", "-c", "import time; time.sleep(0.4)"],
         ),
         CheckDefinition(name="manual", command=["python", "-V"], run=False),
     ]
@@ -36,7 +36,8 @@ def test_runs_checks_concurrently_and_keeps_recommendations_distinct(tmp_path: P
     results = CheckRunner().run(tmp_path, definitions, concurrency=2)
     duration = time.monotonic() - started
 
-    assert duration < 0.38
+    # Sequential execution takes at least 0.8 seconds before interpreter startup.
+    assert duration < 0.75
     assert [result.status for result in results] == [
         CheckStatus.PASSED,
         CheckStatus.PASSED,
