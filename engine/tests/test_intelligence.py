@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from conftest import git
 
+from codepreflight_engine.errors import CodePreflightError
 from codepreflight_engine.intelligence import RepositoryIntelligence
 from codepreflight_engine.models import ProviderDescriptor, ProviderKind, ProviderState
 
@@ -29,6 +30,30 @@ class ExplanationAdapter:
                     {"path": "feature.py", "line": 2},
                     {"path": "invented.py", "line": 99},
                 ],
+            }
+        )
+
+
+class HistoryAdapter:
+    def __init__(self, commit: str, *, answer_mode: bool = False) -> None:
+        self.commit = commit
+        self.answer_mode = answer_mode
+        self.prompts: list[str] = []
+        self.descriptor = ExplanationAdapter.descriptor
+
+    def review(self, prompt: str, schema: dict[str, object]) -> str:
+        self.prompts.append(prompt)
+        if self.answer_mode:
+            return json.dumps(
+                {
+                    "answer": "The validation was introduced by the cited commit.",
+                    "evidence": [{"path": "feature.py", "line": 1, "commit": self.commit}],
+                }
+            )
+        return json.dumps(
+            {
+                "summary": "The cited commit introduced the current behavior.",
+                "evidence": [{"path": "feature.py", "line": 1, "commit": self.commit}],
             }
         )
 
@@ -71,3 +96,71 @@ def test_finding_details_are_local_and_evidence_grounded(git_repository: Path) -
     assert "+value = False" in detail["evidenceDiff"]
     assert detail["history"] == []
     assert detail["suggestedTests"] == ["pytest tests/test_feature.py"]
+
+
+def test_history_explanation_requires_commit_that_touched_file(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (git_repository / "feature.py").write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    git(git_repository, "commit", "-m", "Introduce feature behavior")
+    commit = git(git_repository, "rev-parse", "HEAD").strip()
+    adapter = HistoryAdapter(commit)
+    registry = SimpleNamespace(adapter=lambda provider_id: adapter)
+    monkeypatch.setattr(
+        "codepreflight_engine.intelligence.ProviderRegistry", lambda config: registry
+    )
+
+    result = RepositoryIntelligence().run(
+        git_repository, {"mode": "history", "path": "feature.py", "provider": "fake"}
+    )
+
+    assert result["result"]["evidence"][0]["commit"] == commit
+    assert "commit " + commit in adapter.prompts[0]
+
+
+def test_historical_question_includes_git_history(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (git_repository / "feature.py").write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    git(git_repository, "commit", "-m", "Introduce feature behavior")
+    commit = git(git_repository, "rev-parse", "HEAD").strip()
+    (git_repository / "feature.py").write_text("value = False\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    adapter = HistoryAdapter(commit, answer_mode=True)
+    registry = SimpleNamespace(adapter=lambda provider_id: adapter)
+    monkeypatch.setattr(
+        "codepreflight_engine.intelligence.ProviderRegistry", lambda config: registry
+    )
+
+    result = RepositoryIntelligence().run(
+        git_repository,
+        {
+            "mode": "ask",
+            "question": "Which commit introduced this behavior?",
+            "provider": "fake",
+        },
+    )
+
+    assert result["result"]["evidence"][0]["commit"] == commit
+    assert "Relevant Git history" in adapter.prompts[0]
+
+
+def test_history_rejects_commit_unrelated_to_cited_file(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unrelated = git(git_repository, "rev-parse", "HEAD").strip()
+    (git_repository / "feature.py").write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    git(git_repository, "commit", "-m", "Introduce feature behavior")
+    adapter = HistoryAdapter(unrelated)
+    registry = SimpleNamespace(adapter=lambda provider_id: adapter)
+    monkeypatch.setattr(
+        "codepreflight_engine.intelligence.ProviderRegistry", lambda config: registry
+    )
+
+    with pytest.raises(CodePreflightError, match="must cite a commit"):
+        RepositoryIntelligence().run(
+            git_repository, {"mode": "history", "path": "feature.py", "provider": "fake"}
+        )
