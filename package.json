@@ -9,6 +9,8 @@
   "scripts": {
     "build": "npm run build --workspace @codepreflight/cli",
     "check": "npm run check --workspace @codepreflight/cli",
+    "protocol:check": "uv run --project engine python scripts/generate_protocol.py --check",
+    "protocol:generate": "uv run --project engine python scripts/generate_protocol.py",
     "test": "npm run test --workspace @codepreflight/cli",
     "preflight": "npm run dev --workspace @codepreflight/cli --"
   },

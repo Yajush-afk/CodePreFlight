@@ -12,7 +12,12 @@ interface SnapshotView {
   base_branch?: string | null;
   ahead?: number;
   behind?: number;
-  files?: Array<{ path: string; staged: boolean; unstaged: boolean; untracked: boolean }>;
+  files?: Array<{
+    path: string;
+    staged: boolean;
+    unstaged: boolean;
+    untracked: boolean;
+  }>;
   conflicts?: string[];
   project?: { attention_areas?: string[] };
 }
@@ -40,7 +45,9 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
     new EngineClient()
       .status(repositoryPath)
       .then((result) => setSnapshot(result.repository as SnapshotView))
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)));
+      .catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : String(reason)),
+      );
   };
 
   const runReview = (): void => {
@@ -94,19 +101,30 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
   return (
     <Box flexDirection="column" padding={1}>
       <Box justifyContent="space-between">
-        <Text bold color="cyan">CodePreFlight</Text>
+        <Text bold color="cyan">
+          CodePreFlight
+        </Text>
         <Text dimColor>repository inspection</Text>
       </Box>
       <Box marginTop={1} flexDirection="column">
-        <Text>Branch  <Text bold>{snapshot.branch ?? `detached @ ${snapshot.detached_head}`}</Text></Text>
-        <Text>Base    {snapshot.base_branch ?? "not detected"}</Text>
-        <Text>Sync    {snapshot.ahead ?? 0} ahead · {snapshot.behind ?? 0} behind</Text>
+        <Text>
+          Branch{" "}
+          <Text bold>
+            {snapshot.branch ?? `detached @ ${snapshot.detached_head}`}
+          </Text>
+        </Text>
+        <Text>Base {snapshot.base_branch ?? "not detected"}</Text>
+        <Text>
+          Sync {snapshot.ahead ?? 0} ahead · {snapshot.behind ?? 0} behind
+        </Text>
       </Box>
       <Box marginTop={1} gap={2}>
         <Text color="green">{staged} staged</Text>
         <Text color="yellow">{unstaged} unstaged</Text>
         <Text color="magenta">{untracked} untracked</Text>
-        <Text color={snapshot.conflicts?.length ? "red" : undefined}>{snapshot.conflicts?.length ?? 0} conflicts</Text>
+        <Text color={snapshot.conflicts?.length ? "red" : undefined}>
+          {snapshot.conflicts?.length ?? 0} conflicts
+        </Text>
       </Box>
       {(snapshot.project?.attention_areas?.length ?? 0) > 0 && (
         <Box marginTop={1} flexDirection="column">
@@ -114,7 +132,11 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
           <Text>{snapshot.project?.attention_areas?.join(" · ")}</Text>
         </Box>
       )}
-      {activity && <Box marginTop={1}><Text color="cyan">{activity}</Text></Box>}
+      {activity && (
+        <Box marginTop={1}>
+          <Text color="cyan">{activity}</Text>
+        </Box>
+      )}
       {review && (
         <Box marginTop={1} flexDirection="column">
           <Text bold>Review</Text>
@@ -123,11 +145,14 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
             const evidence = finding.evidence?.[0];
             return (
               <Text key={`${finding.title}-${index}`}>
-                {finding.severity?.toUpperCase()} · {finding.title} · {evidence?.path}:{evidence?.start_line} · {finding.verification}
+                {finding.severity?.toUpperCase()} · {finding.title} ·{" "}
+                {evidence?.path}:{evidence?.start_line} · {finding.verification}
               </Text>
             );
           })}
-          {(review.findings?.length ?? 0) === 0 && <Text color="green">No verified findings.</Text>}
+          {(review.findings?.length ?? 0) === 0 && (
+            <Text color="green">No verified findings.</Text>
+          )}
         </Box>
       )}
       <Box marginTop={1}>

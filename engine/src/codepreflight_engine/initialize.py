@@ -70,9 +70,7 @@ def initialize_repository(root: Path, *, write: bool, trust: bool = False) -> di
     path = repository_config_path(root)
     if trust:
         if not path.exists():
-            raise CodePreflightError(
-                "config_missing", "No .codepreflight.toml exists to trust"
-            )
+            raise CodePreflightError("config_missing", "No .codepreflight.toml exists to trust")
         config = load_config(root)
         trust_repository(root)
         return {

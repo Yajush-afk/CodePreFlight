@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "tsc -p tsconfig.json --noEmit",
+    "check": "tsc -p tsconfig.json --noEmit && prettier --check \"src/**/*.{ts,tsx}\"",
     "dev": "tsx src/cli.ts",
     "test": "vitest run"
   },
@@ -20,6 +20,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/react": "^19.3.0",
+    "prettier": "^3.6.2",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^5.0.1"

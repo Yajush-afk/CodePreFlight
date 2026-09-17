@@ -35,11 +35,20 @@ export class EngineClient {
     return await new Promise((resolvePromise, reject) => {
       let settled = false;
       let stderr = "";
+      let requestSent = false;
       const lines = createInterface({ input: child.stdout });
+      const readyTimeout = setTimeout(() => {
+        stop(
+          new Error(
+            "Python engine did not complete the protocol handshake within 5 seconds",
+          ),
+        );
+      }, 5_000);
 
       const stop = (error?: Error): void => {
         if (settled) return;
         settled = true;
+        clearTimeout(readyTimeout);
         lines.close();
         if (!child.killed) child.kill("SIGTERM");
         if (error) reject(error);
@@ -52,12 +61,27 @@ export class EngineClient {
       lines.on("line", (line) => {
         try {
           const event = parseEngineEvent(line);
+          if (event.event === "ready") {
+            if (requestSent)
+              throw new Error("Engine emitted more than one ready event");
+            requestSent = true;
+            clearTimeout(readyTimeout);
+            onEvent?.(event);
+            child.stdin.write(`${JSON.stringify(request)}\n`);
+            child.stdin.end();
+            return;
+          }
+          if (!requestSent)
+            throw new Error(
+              "Engine emitted an event before the ready handshake",
+            );
           if (event.requestId !== requestId) return;
           onEvent?.(event);
           if (event.event === "error") {
             stop(new Error(event.error?.message ?? "Engine request failed"));
           } else if (event.event === "complete") {
             settled = true;
+            clearTimeout(readyTimeout);
             lines.close();
             resolvePromise(event.payload ?? {});
           }
@@ -76,9 +100,6 @@ export class EngineClient {
           );
         }
       });
-
-      child.stdin.write(`${JSON.stringify(request)}\n`);
-      child.stdin.end();
     });
   }
 

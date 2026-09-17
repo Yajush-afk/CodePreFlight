@@ -60,6 +60,10 @@ _Avoid_: Prompt dump, repository upload
 The record of what a Context Package includes, excludes, redacts, or truncates.
 _Avoid_: Token report, file list
 
+**Review Fingerprint**:
+A deterministic identity for the complete inputs to a Review, used to detect changed work and safely reuse a prior result.
+_Avoid_: Cache key, diff hash
+
 **Check**:
 A deterministic repository command whose observed result may inform a Review, such as a test, linter, type check, or build validation.
 _Avoid_: Tool call, validation step
