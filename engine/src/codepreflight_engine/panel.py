@@ -16,9 +16,7 @@ from .review import EventEmitter, ReviewOrchestrator
 
 
 class PanelReviewer:
-    def review(
-        self, root: Path, payload: dict[str, Any], emit: EventEmitter
-    ) -> PanelReviewResult:
+    def review(self, root: Path, payload: dict[str, Any], emit: EventEmitter) -> PanelReviewResult:
         provider_ids = payload.get("providers")
         if not isinstance(provider_ids, list) or len(provider_ids) < 2:
             raise CodePreflightError(
@@ -56,11 +54,7 @@ class PanelReviewer:
                 continue
             for finding in result.review.findings:
                 matching = next(
-                    (
-                        group
-                        for group in groups
-                        if group[1] and self._related(group[1][0], finding)
-                    ),
+                    (group for group in groups if group[1] and self._related(group[1][0], finding)),
                     None,
                 )
                 if matching:

@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROTOCOL_VERSION = 1
+from .protocol_generated import EngineCommand, EngineEventName, ProtocolVersion
 
 
 class StrictModel(BaseModel):
@@ -13,21 +13,9 @@ class StrictModel(BaseModel):
 
 
 class EngineRequest(StrictModel):
-    protocolVersion: Literal[1]
+    protocolVersion: ProtocolVersion
     requestId: str = Field(min_length=1)
-    command: Literal[
-        "cache",
-        "commit",
-        "doctor",
-        "explain",
-        "hooks",
-        "init",
-        "panel_review",
-        "pr_prepare",
-        "providers",
-        "review",
-        "status",
-    ]
+    command: EngineCommand
     repositoryPath: str = Field(min_length=1)
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -40,17 +28,9 @@ class EngineFailure(StrictModel):
 
 
 class EngineEvent(StrictModel):
-    protocolVersion: Literal[1] = 1
+    protocolVersion: ProtocolVersion = 1
     requestId: str
-    event: Literal[
-        "ready",
-        "progress",
-        "consent_required",
-        "provider_delta",
-        "finding",
-        "complete",
-        "error",
-    ]
+    event: EngineEventName
     payload: dict[str, Any] | None = None
     error: EngineFailure | None = None
 

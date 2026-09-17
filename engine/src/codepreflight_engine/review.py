@@ -82,9 +82,7 @@ class ReviewOrchestrator:
             blast_radius,
         )
         cache = ReviewCache(root)
-        if bool(config.get("cache", {}).get("enabled", True)) and not bool(
-            payload.get("noCache")
-        ):
+        if bool(config.get("cache", {}).get("enabled", True)) and not bool(payload.get("noCache")):
             cached = cache.get(fingerprint, context)
             if cached:
                 emit("progress", {"message": "Using cached review for unchanged repository state"})

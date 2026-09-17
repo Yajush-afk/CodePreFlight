@@ -8,8 +8,10 @@ build:
 	npm run build
 
 check:
+	npm run protocol:check
 	npm run check
-	uv run --project engine ruff check engine
+	uv run --project engine ruff check engine scripts
+	uv run --project engine ruff format --check engine scripts
 	uv run --project engine mypy engine/src
 
 test:

@@ -45,11 +45,7 @@ def test_diff_explanation_verifies_evidence(
         "codepreflight_engine.intelligence.ProviderRegistry", lambda config: registry
     )
 
-    result = RepositoryIntelligence().run(
-        git_repository, {"mode": "diff", "provider": "fake"}
-    )
+    result = RepositoryIntelligence().run(git_repository, {"mode": "diff", "provider": "fake"})
 
     assert result["result"]["summary"].startswith("The staged function")
-    assert result["result"]["evidence"] == [
-        {"path": "feature.py", "line": 2, "commit": None}
-    ]
+    assert result["result"]["evidence"] == [{"path": "feature.py", "line": 2, "commit": None}]

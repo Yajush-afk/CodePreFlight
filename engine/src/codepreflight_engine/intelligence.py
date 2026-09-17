@@ -77,9 +77,7 @@ class RepositoryIntelligence:
                 raise CodePreflightError(
                     "unsupported_target", "Questions support staged or branch evidence"
                 )
-            target = cast(
-                Literal["staged", "branch", "pull_request"], requested_target
-            )
+            target = cast(Literal["staged", "branch", "pull_request"], requested_target)
             base = self._base_revision(root, payload) if target == "branch" else None
             context = ContextBuilder().build(
                 root,
@@ -188,10 +186,7 @@ class RepositoryIntelligence:
                 if item.line > line_count:
                     continue
             if item.commit and (
-                git.run(
-                    "cat-file", "-e", f"{item.commit}^{{commit}}", check=False
-                ).returncode
-                != 0
+                git.run("cat-file", "-e", f"{item.commit}^{{commit}}", check=False).returncode != 0
             ):
                 continue
             verified.append(item)

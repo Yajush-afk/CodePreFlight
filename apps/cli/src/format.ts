@@ -34,11 +34,16 @@ interface ReviewView {
 export function printReview(value: unknown): void {
   const review = value as ReviewView;
   process.stdout.write(`Provider: ${review.provider?.name ?? "unknown"}\n`);
-  if (review.cache_hit) process.stdout.write("Cache: hit (repository content was not persisted)\n");
-  process.stdout.write(`Summary: ${review.summary ?? "No summary returned."}\n`);
+  if (review.cache_hit)
+    process.stdout.write("Cache: hit (repository content was not persisted)\n");
+  process.stdout.write(
+    `Summary: ${review.summary ?? "No summary returned."}\n`,
+  );
   const checks = review.context?.checks ?? [];
   if (checks.length) {
-    process.stdout.write(`Checks: ${checks.map((check) => `${check.name}: ${check.status}`).join(" · ")}\n`);
+    process.stdout.write(
+      `Checks: ${checks.map((check) => `${check.name}: ${check.status}`).join(" · ")}\n`,
+    );
   }
   const findings = review.findings ?? [];
   process.stdout.write(
@@ -54,7 +59,9 @@ export function printReview(value: unknown): void {
         `Inspect: ${finding.recommendation}\n`,
     );
     if (finding.suggested_tests?.length) {
-      process.stdout.write(`Suggested tests: ${finding.suggested_tests.join("; ")}\n`);
+      process.stdout.write(
+        `Suggested tests: ${finding.suggested_tests.join("; ")}\n`,
+      );
     }
   }
   if (review.blocking) process.stdout.write("\nReview policy: blocking\n");
@@ -82,20 +89,28 @@ export function printExplanation(value: unknown): void {
     };
   };
   const result = response.result ?? {};
-  process.stdout.write(`${result.summary ?? result.answer ?? "No explanation returned."}\n`);
+  process.stdout.write(
+    `${result.summary ?? result.answer ?? "No explanation returned."}\n`,
+  );
   if (result.before) process.stdout.write(`\nBefore\n${result.before}\n`);
   if (result.after) process.stdout.write(`\nAfter\n${result.after}\n`);
   if (result.side_effects?.length) {
-    process.stdout.write(`\nPotential side effects\n${result.side_effects.map((item) => `- ${item}`).join("\n")}\n`);
+    process.stdout.write(
+      `\nPotential side effects\n${result.side_effects.map((item) => `- ${item}`).join("\n")}\n`,
+    );
   }
   if (result.evidence?.length) {
     process.stdout.write(
       `\nEvidence\n${result.evidence
-        .map((item) => `- ${item.path}${item.line ? `:${item.line}` : ""}${item.commit ? ` @ ${item.commit}` : ""}`)
+        .map(
+          (item) =>
+            `- ${item.path}${item.line ? `:${item.line}` : ""}${item.commit ? ` @ ${item.commit}` : ""}`,
+        )
         .join("\n")}\n`,
     );
   }
-  if (result.uncertainty) process.stdout.write(`\nUncertainty: ${result.uncertainty}\n`);
+  if (result.uncertainty)
+    process.stdout.write(`\nUncertainty: ${result.uncertainty}\n`);
 }
 
 export function printPanel(value: unknown): void {

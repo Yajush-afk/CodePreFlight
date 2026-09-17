@@ -1,17 +1,11 @@
-export const PROTOCOL_VERSION = 1 as const;
+import {
+  ENGINE_EVENTS,
+  PROTOCOL_VERSION,
+  type EngineCommand,
+  type EngineEventName,
+} from "./protocol.generated.js";
 
-export type EngineCommand =
-  | "cache"
-  | "commit"
-  | "doctor"
-  | "explain"
-  | "hooks"
-  | "init"
-  | "panel_review"
-  | "pr_prepare"
-  | "providers"
-  | "review"
-  | "status";
+export { PROTOCOL_VERSION, type EngineCommand } from "./protocol.generated.js";
 
 export interface EngineRequest {
   protocolVersion: typeof PROTOCOL_VERSION;
@@ -31,14 +25,7 @@ export interface EngineError {
 export interface EngineEvent {
   protocolVersion: typeof PROTOCOL_VERSION;
   requestId: string;
-  event:
-    | "ready"
-    | "progress"
-    | "consent_required"
-    | "provider_delta"
-    | "finding"
-    | "complete"
-    | "error";
+  event: EngineEventName;
   payload?: Record<string, unknown>;
   error?: EngineError;
 }
@@ -65,6 +52,11 @@ export function parseEngineEvent(line: string): EngineEvent {
   }
   if (typeof event.requestId !== "string" || typeof event.event !== "string") {
     throw new EngineProtocolError("Engine event is missing required fields");
+  }
+  if (!ENGINE_EVENTS.includes(event.event as EngineEventName)) {
+    throw new EngineProtocolError(
+      `Engine emitted unknown event: ${event.event}`,
+    );
   }
   return event as EngineEvent;
 }

@@ -17,6 +17,7 @@ from .initialize import initialize_repository
 from .intelligence import RepositoryIntelligence
 from .models import EngineEvent, EngineFailure, EngineRequest
 from .panel import PanelReviewer
+from .protocol_generated import PROTOCOL_VERSION
 from .providers import discover_providers
 from .pull_request import prepare_pull_request
 from .repository import RepositoryInspector
@@ -179,6 +180,13 @@ def handle_line(line: str) -> None:
 
 
 def main() -> None:
+    emit(
+        EngineEvent(
+            requestId="",
+            event="ready",
+            payload={"engineVersion": "0.1.0", "protocolVersion": PROTOCOL_VERSION},
+        )
+    )
     for line in sys.stdin:
         if line.strip():
             handle_line(line)
