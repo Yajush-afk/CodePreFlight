@@ -4,7 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .models import PullRequestDraft, Severity
+from .git import GitRunner
+from .models import CheckStatus, PullRequestDraft, Severity
 from .review import EventEmitter, ReviewOrchestrator
 
 
@@ -18,14 +19,30 @@ def prepare_pull_request(
     )
     title = _title(review.summary)
     changed = "\n".join(f"- `{path}`" for path in review.context.changed_files)
-    if review.context.checks:
+    executed = [
+        check
+        for check in review.context.checks
+        if check.status in {CheckStatus.PASSED, CheckStatus.FAILED, CheckStatus.TIMED_OUT}
+    ]
+    skipped = [check for check in review.context.checks if check.status == CheckStatus.SKIPPED]
+    configured_recommendations = [
+        " ".join(check.command)
+        for check in review.context.checks
+        if check.status == CheckStatus.RECOMMENDED
+    ]
+    if executed:
         testing = "\n".join(
             f"- {check.name}: **{check.status.value}**"
             + (f" (exit {check.exit_code})" if check.exit_code is not None else "")
-            for check in review.context.checks
+            for check in executed
         )
     else:
         testing = "- No automated checks were run by CodePreFlight."
+    skipped_text = (
+        "\n".join(f"- {check.name}" for check in skipped)
+        if skipped
+        else "- No configured checks were skipped."
+    )
 
     risks = [
         finding
@@ -44,7 +61,10 @@ def prepare_pull_request(
         else "- No verified critical or warning findings."
     )
     recommendations = sorted(
-        {test for finding in review.findings for test in finding.suggested_tests}
+        {
+            *configured_recommendations,
+            *(test for finding in review.findings for test in finding.suggested_tests),
+        }
     )
     recommended_text = (
         "\n".join(f"- {test}" for test in recommendations)
@@ -61,11 +81,25 @@ def prepare_pull_request(
         if breaking
         else "- None identified."
     )
+    rationale = _rationale(root, review.context.base_revision)
+    attention = [
+        *(f"{finding.severity.value.title()}: {finding.title}" for finding in risks),
+        *(f"{item.path}: {item.relationship} ({item.confidence})" for item in review.blast_radius),
+    ]
+    attention_text = (
+        "\n".join(f"- {item}" for item in attention)
+        if attention
+        else "- No specific human-attention areas were identified."
+    )
     description = f"""## Summary
 
 {review.summary}
 
-## Changed files
+## Why
+
+{rationale}
+
+## What changed
 
 {changed}
 
@@ -73,13 +107,21 @@ def prepare_pull_request(
 
 {testing}
 
-## Recommended testing
+## Checks skipped
+
+{skipped_text}
+
+## Recommended manual checks
 
 {recommended_text}
 
 ## Risk areas
 
 {risk_text}
+
+## Human attention
+
+{attention_text}
 
 ## Breaking changes
 
@@ -91,3 +133,10 @@ def prepare_pull_request(
 def _title(summary: str) -> str:
     first = re.split(r"[.!?]\s|\n", summary.strip(), maxsplit=1)[0].strip()
     return first[:72].rstrip(" .") or "Update repository changes"
+
+
+def _rationale(root: Path, base_revision: str | None) -> str:
+    if not base_revision:
+        return "- No base revision was available; verify the change rationale manually."
+    result = GitRunner(root).run("log", "--format=- %s", f"{base_revision}..HEAD", check=False)
+    return result.stdout.strip() or "- No commit rationale was available; verify intent manually."

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import React from "react";
@@ -218,12 +219,16 @@ pr.command("prepare")
     "approve sending the context package to a remote provider",
   )
   .option("--json", "print machine-readable JSON")
+  .option("--yes", "approve displaying or exporting the generated PR draft")
+  .option("--output <path>", "write the approved PR description to a file")
   .action(
     async (options: {
       base?: string;
       provider?: string;
       approve?: boolean;
       json?: boolean;
+      yes?: boolean;
+      output?: string;
     }) => {
       try {
         const result = await client.request(
@@ -236,7 +241,35 @@ pr.command("prepare")
           },
           printProviderDisclosure,
         );
-        if (options.json) printValue(result, true);
+        let approved = Boolean(options.yes);
+        if (!approved && process.stdin.isTTY && process.stdout.isTTY) {
+          const prompt = createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+          const confirmation = await prompt.question(
+            `Approve generated PR draft "${String(result.title)}" for display/export? [y/N] `,
+          );
+          prompt.close();
+          approved = confirmation.trim().toLowerCase() === "y";
+        }
+        if (!approved) {
+          process.stderr.write(
+            "PR draft was prepared but not displayed or exported; rerun with --yes after review.\n",
+          );
+          process.exitCode = 3;
+          return;
+        }
+        if (options.output) {
+          await writeFile(
+            resolve(options.output),
+            `# ${String(result.title)}\n\n${String(result.description)}`,
+            "utf8",
+          );
+          process.stdout.write(
+            `Approved PR description written to ${resolve(options.output)}\n`,
+          );
+        } else if (options.json) printValue(result, true);
         else {
           process.stdout.write(
             `PR title: ${String(result.title)}\n\n${String(result.description)}\n`,

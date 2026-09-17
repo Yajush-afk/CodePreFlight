@@ -1,6 +1,5 @@
-from pathlib import Path
-
 import pytest
+from conftest import git
 
 from codepreflight_engine.models import (
     CheckResult,
@@ -16,8 +15,12 @@ from codepreflight_engine.pull_request import prepare_pull_request
 
 
 def test_pr_draft_reports_checks_that_actually_ran(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    git_repository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    base = git(git_repository, "rev-parse", "HEAD").strip()
+    (git_repository / "status.py").write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "status.py")
+    git(git_repository, "commit", "-m", "Add repository status support")
     review = ReviewResult(
         provider=ProviderDescriptor(
             id="fake",
@@ -42,10 +45,22 @@ def test_pr_draft_reports_checks_that_actually_ran(
                     status=CheckStatus.PASSED,
                     exit_code=0,
                     duration_ms=10,
-                )
+                ),
+                CheckResult(
+                    name="integration",
+                    command=["pytest", "tests/integration"],
+                    status=CheckStatus.RECOMMENDED,
+                    duration_ms=0,
+                ),
+                CheckResult(
+                    name="browser",
+                    command=["npm", "run", "test:e2e"],
+                    status=CheckStatus.SKIPPED,
+                    duration_ms=0,
+                ),
             ],
             target="pull_request",
-            base_revision="abc",
+            base_revision=base,
         ),
         blocking=False,
         fingerprint="fingerprint",
@@ -55,8 +70,12 @@ def test_pr_draft_reports_checks_that_actually_ran(
         lambda self, root, payload, emit: review,
     )
 
-    draft = prepare_pull_request(tmp_path, {}, lambda event, payload: None)
+    draft = prepare_pull_request(git_repository, {}, lambda event, payload: None)
 
     assert draft.title == "Add repository status support"
     assert "tests: **passed**" in draft.description
     assert "No automated checks were run" not in draft.description
+    assert "integration: **recommended**" not in draft.description
+    assert "pytest tests/integration" in draft.description
+    assert "browser" in draft.description
+    assert "Add repository status support" in draft.description
