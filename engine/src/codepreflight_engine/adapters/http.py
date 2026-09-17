@@ -14,8 +14,27 @@ def _post(url: str, *, json: dict[str, Any], headers: dict[str, str] | None = No
         response = httpx.post(url, json=json, headers=headers, timeout=180)
         response.raise_for_status()
         return response.json()
-    except (httpx.HTTPError, ValueError) as error:
-        raise CodePreflightError("provider_error", str(error)) from error
+    except httpx.TimeoutException as error:
+        raise CodePreflightError(
+            "provider_timeout", "Provider request timed out", recoverable=True
+        ) from error
+    except httpx.HTTPStatusError as error:
+        status = error.response.status_code
+        if status in {401, 403}:
+            code, message = "provider_authentication_failed", "Provider authentication failed"
+        elif status == 429:
+            code, message = "provider_rate_limited", "Provider rate limit was reached"
+        else:
+            code, message = "provider_http_error", f"Provider returned HTTP {status}"
+        raise CodePreflightError(code, message, recoverable=True) from error
+    except httpx.HTTPError as error:
+        raise CodePreflightError(
+            "provider_connection_error", str(error), recoverable=True
+        ) from error
+    except ValueError as error:
+        raise CodePreflightError(
+            "provider_output_invalid", "Provider returned a non-JSON response"
+        ) from error
 
 
 class OllamaAdapter:
@@ -40,8 +59,9 @@ class OllamaAdapter:
                 "format": schema,
             },
         )
-        if isinstance(value, dict) and isinstance(value.get("response"), str):
-            return value["response"]
+        response_text = value.get("response") if isinstance(value, dict) else None
+        if isinstance(response_text, str):
+            return response_text
         raise CodePreflightError("provider_output_invalid", "Ollama returned no review text")
 
 

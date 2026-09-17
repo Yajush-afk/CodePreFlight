@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .git import GitRunner
 from .models import (
+    EvidenceLocation,
     Finding,
     FindingDraft,
     VerificationState,
@@ -40,16 +41,18 @@ class FindingVerifier:
         successes = 0
         notes: list[str] = []
         valid_locations = 0
+        normalized_evidence: list[EvidenceLocation] = []
         git = GitRunner(root)
         for evidence in draft.evidence:
             checks += 1
-            candidate = (root / evidence.path).resolve()
+            normalized_path = self._normalize_path(root, evidence.path)
+            candidate = (root / normalized_path).resolve()
             try:
                 candidate.relative_to(root.resolve())
             except ValueError:
                 notes.append(f"Evidence path escapes the repository: {evidence.path}")
                 continue
-            content = self._selected_content(git, target, evidence.path)
+            content = self._selected_content(git, target, normalized_path)
             if content is None:
                 notes.append(f"Evidence file does not exist in reviewed state: {evidence.path}")
                 continue
@@ -59,26 +62,37 @@ class FindingVerifier:
                 or evidence.start_line > len(lines)
                 or evidence.end_line > len(lines)
             ):
-                notes.append(f"Evidence lines are outside {evidence.path}")
+                notes.append(f"Evidence lines are outside {normalized_path}")
                 continue
+            normalized_evidence.append(evidence.model_copy(update={"path": normalized_path}))
             valid_locations += 1
             successes += 1
             checks += 1
-            staged_lines = changed_lines.get(evidence.path, set())
+            staged_lines = changed_lines.get(normalized_path, set())
             if any(
                 line in staged_lines for line in range(evidence.start_line, evidence.end_line + 1)
             ):
                 successes += 1
             else:
-                notes.append(f"Evidence is outside changed lines in {evidence.path}")
+                notes.append(f"Evidence is outside changed lines in {normalized_path}")
             if evidence.symbol:
                 checks += 1
                 if re.search(rf"\b{re.escape(evidence.symbol)}\b", "\n".join(lines)):
                     successes += 1
                 else:
                     notes.append(
-                        f"Referenced symbol '{evidence.symbol}' was not found in {evidence.path}"
+                        f"Referenced symbol '{evidence.symbol}' was not found in {normalized_path}"
                     )
+
+        for suggestion in draft.suggested_tests:
+            path = self._suggested_test_path(suggestion)
+            if path is None:
+                continue
+            checks += 1
+            if (root / path).is_file():
+                successes += 1
+            else:
+                notes.append(f"Suggested test file does not exist: {path}")
 
         if valid_locations == 0:
             state = VerificationState.REJECTED
@@ -88,11 +102,14 @@ class FindingVerifier:
             state = VerificationState.PARTIALLY_VERIFIED
         else:
             state = VerificationState.UNVERIFIED
+        values = draft.model_dump()
+        values["evidence"] = normalized_evidence or draft.evidence
+        primary = (normalized_evidence or draft.evidence)[0]
         identity = hashlib.sha256(
-            f"{draft.title}|{draft.evidence[0].path}|{draft.evidence[0].start_line}".encode()
+            f"{draft.category}|{draft.title}|{primary.path}|{primary.start_line}".encode()
         ).hexdigest()[:12]
         return Finding(
-            **draft.model_dump(),
+            **values,
             id=identity,
             verification=state,
             verification_notes=notes,
@@ -124,7 +141,7 @@ class FindingVerifier:
         return changed
 
     def _duplicates_existing(self, finding: Finding, existing: list[Finding]) -> bool:
-        title = self._normalize(finding.title)
+        title_tokens = self._tokens(finding.title)
         location = finding.evidence[0]
         for other in existing:
             other_location = other.evidence[0]
@@ -133,9 +150,25 @@ class FindingVerifier:
                 location.end_line < other_location.start_line
                 or other_location.end_line < location.start_line
             )
-            if same_path and overlaps and self._normalize(other.title) == title:
+            other_tokens = self._tokens(other.title)
+            union = title_tokens | other_tokens
+            similarity = len(title_tokens & other_tokens) / len(union) if union else 1.0
+            if finding.category == other.category and same_path and overlaps and similarity >= 0.6:
                 return True
         return False
 
-    def _normalize(self, title: str) -> str:
-        return " ".join(re.sub(r"[^a-z0-9 ]", "", title.lower()).split())
+    def _tokens(self, title: str) -> set[str]:
+        return set(re.sub(r"[^a-z0-9 ]", "", title.lower()).split())
+
+    def _normalize_path(self, root: Path, path: str) -> str:
+        candidate = (root / path).resolve()
+        try:
+            return candidate.relative_to(root.resolve()).as_posix()
+        except ValueError:
+            return path
+
+    def _suggested_test_path(self, suggestion: str) -> str | None:
+        candidate = suggestion.strip().strip("`'\"")
+        if " " in candidate or not Path(candidate).suffix:
+            return None
+        return candidate.removeprefix("./")

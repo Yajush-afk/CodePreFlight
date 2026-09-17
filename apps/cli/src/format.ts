@@ -7,6 +7,8 @@ export function printValue(value: unknown, json: boolean): void {
 }
 
 interface ReviewView {
+  status?: "completed" | "failed";
+  failure?: { code?: string; message?: string; attempts?: number };
   summary?: string;
   blocking?: boolean;
   cache_hit?: boolean;
@@ -34,6 +36,12 @@ interface ReviewView {
 export function printReview(value: unknown): void {
   const review = value as ReviewView;
   process.stdout.write(`Provider: ${review.provider?.name ?? "unknown"}\n`);
+  if (review.status === "failed") {
+    process.stdout.write(
+      `Review failed: ${review.failure?.message ?? review.failure?.code ?? "invalid provider response"}` +
+        `${review.failure?.attempts ? ` (after ${review.failure.attempts} attempts)` : ""}\n`,
+    );
+  }
   if (review.cache_hit)
     process.stdout.write("Cache: hit (repository content was not persisted)\n");
   process.stdout.write(

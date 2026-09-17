@@ -59,6 +59,9 @@ def generate_commit_message(review: ReviewResult) -> str:
         kind = "chore"
     else:
         kind = "feat"
+    if review.status == "failed":
+        noun = files[0] if len(files) == 1 else f"{len(files)} staged files"
+        return f"{kind}: update {noun}"
     sentence = re.split(r"[.!?]\s|\n", review.summary.strip(), maxsplit=1)[0].strip()
     sentence = sentence[:68].rstrip(" .") or "update staged changes"
     sentence = sentence[0].lower() + sentence[1:] if sentence else sentence

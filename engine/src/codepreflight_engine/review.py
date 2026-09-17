@@ -19,6 +19,7 @@ from .models import (
     Finding,
     ProviderKind,
     ProviderState,
+    ReviewFailure,
     ReviewResult,
     Severity,
     VerificationState,
@@ -27,7 +28,22 @@ from .trust import is_trusted
 from .verification import FindingVerifier
 
 EventEmitter = Callable[[str, dict[str, Any]], None]
-PROMPT_VERSION = "review-v2"
+PROMPT_VERSION = "review-v3"
+
+DEPTH_FOCUS = {
+    "fast": (
+        "Prioritize obvious defects in changed lines: broken logic, leaked credentials, "
+        "debug code, direct regressions, and tests immediately required by the change."
+    ),
+    "standard": (
+        "Inspect the complete branch interaction: cross-file behavior, API compatibility, "
+        "error handling, configuration, and missing integration coverage."
+    ),
+    "deep": (
+        "Inspect architecture and broad system effects: security boundaries, performance, "
+        "backward compatibility, migrations, public interfaces, and end-to-end coverage."
+    ),
+}
 
 
 class ReviewOrchestrator:
@@ -81,6 +97,10 @@ class ReviewOrchestrator:
             )
         blast_radius = BlastRadiusAnalyzer().analyze(root, context.changed_files)
         depth = str(payload.get("depth") or self._default_depth(target))
+        if depth not in DEPTH_FOCUS:
+            raise CodePreflightError(
+                "unsupported_review_depth", f"Unsupported review depth: {depth}"
+            )
         fingerprint = self._fingerprint(
             context.content,
             provider.model_dump(mode="json"),
@@ -127,7 +147,38 @@ class ReviewOrchestrator:
             self._prompt(context.content, depth, blast_radius), provider_output_schema()
         )
         emit("provider_delta", {"characters": len(raw_output)})
-        response = parse_provider_response(raw_output)
+        try:
+            response = parse_provider_response(raw_output)
+        except CodePreflightError as error:
+            if error.code != "provider_output_invalid":
+                raise
+            emit("progress", {"message": "Repairing malformed structured provider output"})
+            repaired_output = adapter.review(
+                self._repair_prompt(raw_output), provider_output_schema()
+            )
+            emit("provider_delta", {"characters": len(repaired_output), "repair": True})
+            try:
+                response = parse_provider_response(repaired_output)
+            except CodePreflightError as repair_error:
+                if repair_error.code != "provider_output_invalid":
+                    raise
+                return ReviewResult(
+                    provider=provider,
+                    summary="Provider review failed structured-output validation.",
+                    findings=[],
+                    rejected_findings=0,
+                    context=context,
+                    blocking=False,
+                    fingerprint=fingerprint,
+                    blast_radius=blast_radius,
+                    status="failed",
+                    failure=ReviewFailure(
+                        code="provider_output_invalid",
+                        message=str(repair_error),
+                        provider_response=repaired_output[-12_000:],
+                        attempts=2,
+                    ),
+                )
 
         emit("progress", {"message": "Verifying provider findings against the repository"})
         findings, rejected = FindingVerifier().verify(
@@ -167,8 +218,18 @@ class ReviewOrchestrator:
             "existing file and line range from the supplied context. If no meaningful issue "
             "exists, "
             "return an empty findings array. Return only JSON matching the required schema.\n\n"
+            + "Review-depth focus: "
+            + DEPTH_FOCUS[depth]
+            + "\n\n"
             + context
             + ("\n\n## Local blast-radius signals\n" + blast if blast else "")
+        )
+
+    def _repair_prompt(self, malformed_output: str) -> str:
+        return (
+            "Convert the following malformed review response into JSON matching the supplied "
+            "schema. Preserve only claims already present. Do not add findings, evidence, or "
+            "facts. Return only the repaired JSON.\n\n" + malformed_output[-12_000:]
         )
 
     def _fingerprint(

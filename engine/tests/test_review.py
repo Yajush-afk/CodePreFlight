@@ -6,6 +6,7 @@ import pytest
 from conftest import git
 
 from codepreflight_engine.adapters.base import ProviderAdapter
+from codepreflight_engine.adapters.fake import FakeProviderAdapter
 from codepreflight_engine.errors import CodePreflightError
 from codepreflight_engine.models import ProviderDescriptor, ProviderKind, ProviderState
 from codepreflight_engine.review import ReviewOrchestrator
@@ -159,3 +160,65 @@ def test_review_cache_avoids_repeating_provider_request(
 
     assert changed.cache_hit is False
     assert adapter.calls == 2
+
+
+def test_review_repairs_malformed_structured_output_once(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    responses = iter(["not json", json.dumps({"summary": "Repaired.", "findings": []})])
+    adapter = FakeProviderAdapter(lambda prompt, schema: next(responses))
+    install_adapter(monkeypatch, adapter)
+    events: list[tuple[str, dict[str, object]]] = []
+
+    result = ReviewOrchestrator().review_staged(
+        git_repository,
+        {"provider": "fake", "noCache": True},
+        lambda event, payload: events.append((event, payload)),
+    )
+
+    assert result.status == "completed"
+    assert result.summary == "Repaired."
+    assert len(adapter.requests) == 2
+    assert "Preserve only claims already present" in adapter.requests[1][0]
+    assert any(
+        payload.get("repair") is True for event, payload in events if event == "provider_delta"
+    )
+
+
+def test_review_preserves_failed_provider_output_after_repair(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    adapter = FakeProviderAdapter("still not json")
+    install_adapter(monkeypatch, adapter)
+
+    result = ReviewOrchestrator().review_staged(
+        git_repository, {"provider": "fake", "noCache": True}, lambda event, payload: None
+    )
+
+    assert result.status == "failed"
+    assert result.blocking is False
+    assert result.findings == []
+    assert result.failure is not None
+    assert result.failure.provider_response == "still not json"
+    assert result.failure.attempts == 2
+    assert len(adapter.requests) == 2
+
+
+@pytest.mark.parametrize(
+    ("depth", "expected"),
+    [
+        ("fast", "obvious defects in changed lines"),
+        ("standard", "complete branch interaction"),
+        ("deep", "architecture and broad system effects"),
+    ],
+)
+def test_review_depths_have_distinct_focus(depth: str, expected: str) -> None:
+    prompt = ReviewOrchestrator()._prompt("diff", depth, [])
+
+    assert expected in prompt

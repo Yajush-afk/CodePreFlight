@@ -199,6 +199,17 @@ class VerificationState(StrEnum):
     REJECTED = "rejected"
 
 
+class FindingCategory(StrEnum):
+    BUG = "bug"
+    SECURITY = "security"
+    COMPATIBILITY = "compatibility"
+    PERFORMANCE = "performance"
+    ERROR_HANDLING = "error_handling"
+    TESTING = "testing"
+    CONFIGURATION = "configuration"
+    OTHER = "other"
+
+
 class EvidenceLocation(StrictModel):
     path: str
     start_line: int = Field(ge=1)
@@ -208,6 +219,7 @@ class EvidenceLocation(StrictModel):
 
 class FindingDraft(StrictModel):
     severity: Severity
+    category: FindingCategory = FindingCategory.OTHER
     title: str = Field(min_length=1, max_length=160)
     explanation: str = Field(min_length=1)
     impact: str = Field(min_length=1)
@@ -235,6 +247,13 @@ class BlastRadiusItem(StrictModel):
     confidence: Literal["confirmed", "inferred"]
 
 
+class ReviewFailure(StrictModel):
+    code: str
+    message: str
+    provider_response: str
+    attempts: int
+
+
 class ReviewResult(StrictModel):
     provider: ProviderDescriptor
     summary: str
@@ -245,6 +264,8 @@ class ReviewResult(StrictModel):
     fingerprint: str
     cache_hit: bool = False
     blast_radius: list[BlastRadiusItem] = Field(default_factory=list)
+    status: Literal["completed", "failed"] = "completed"
+    failure: ReviewFailure | None = None
 
 
 class CommitPreparation(StrictModel):

@@ -14,7 +14,7 @@ and Prettier; Python uses Ruff formatting and linting plus strict mypy.
 
 Keep repository inspection read-only and place every Git mutation behind explicit user
 approval. Provider adapters must accept a curated prompt and schema without receiving
-repository editing or shell permission. Add deterministic fake-provider coverage for normal
+repository editing or unrestricted shell permission. Add deterministic fake-provider coverage for normal
 tests; live provider tests must remain opt-in so CI never requires credentials or spends
 tokens.
 
