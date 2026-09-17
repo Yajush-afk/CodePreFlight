@@ -9,3 +9,8 @@ latency, and failure state. Results are comparable only when all of those inputs
 Normal tests use deterministic fake providers and do not spend tokens. Live adapter tests
 run only when explicitly enabled. Published measurements must include raw structured results
 and enough environment metadata to reproduce them.
+
+The `seeded/auth_validation` fixture contains a safe baseline, a deliberately regressed
+implementation, and a deterministic test. The root README shows how to stage the regression
+in a temporary repository. The fixture demonstrates evidence collection and honest check
+reporting; it does not promise that every model will produce the same finding.

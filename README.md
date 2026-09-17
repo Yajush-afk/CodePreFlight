@@ -17,3 +17,88 @@ Its core responsibilities are:
 - keeping every repository mutation under explicit developer control.
 
 CodePreFlight is not a coding agent, code editor, IDE, or autonomous software engineer. It is the quality-control layer between code generation and the Git workflow.
+
+## Install from source
+
+CodePreFlight currently supports macOS and Linux with Node.js 22+, Python 3.12+, Git, npm,
+and [`uv`](https://docs.astral.sh/uv/) installed.
+
+```bash
+git clone https://github.com/Yajush-afk/CodePreFlight.git
+cd CodePreFlight
+make install
+npm run build
+npm link --workspace @codepreflight/cli
+preflight doctor
+```
+
+The installed command is `preflight`. Run it inside a Git repository to open the interactive
+terminal view, or use direct commands:
+
+```bash
+preflight status
+preflight init
+preflight providers
+preflight review --staged
+preflight review --branch
+preflight pr prepare
+```
+
+`preflight init` previews the proposed `.codepreflight.toml`; `preflight init --write`
+writes and trusts it. Repository configuration may contain review rules, ignore patterns,
+approved check commands, base-branch settings, and provider model names, but never secrets.
+API credentials stay in environment variables. Before any remote provider receives code,
+CodePreFlight displays the destination, selected-context size, redactions, and context
+manifest and requires explicit approval.
+
+## Review workflow
+
+A fast staged review runs deterministic checks, builds a bounded context package, scans it
+for credentials, asks the selected provider for structured findings, and verifies the
+reported paths and lines locally. Branch review expands the target to the merge base. PR
+preparation performs the deep review and drafts a title and description while distinguishing
+checks actually run from tests merely recommended.
+
+Each finding includes severity, confidence, evidence, verification state, impact, and a
+recommended action. In the interactive view, use `f` to filter severity, the arrow keys to
+select a finding, and Enter to inspect its diff, related files, recent history, and suggested
+tests. Reviews advise by default; only verified severities configured by the repository can
+block a managed hook. Operational provider failures are fail-open unless the repository
+explicitly opts into fail-closed behavior. Standard `git commit --no-verify` and the temporary
+`PREFLIGHT_BYPASS=1` environment variable remain explicit bypass routes.
+
+## Reproducible seeded-defect demonstration
+
+This demonstration creates a temporary repository with working authentication validation,
+then stages a regression that removes it. It includes a deterministic failing test; AI review
+results can vary by provider and model, so the project makes no detection-rate claim.
+
+```bash
+demo_dir="$(mktemp -d)"
+cp evaluation/seeded/auth_validation/before.py "$demo_dir/auth.py"
+cp evaluation/seeded/auth_validation/check_auth.py "$demo_dir/test_auth.py"
+git -C "$demo_dir" init -b main
+git -C "$demo_dir" config user.name "Preflight Demo"
+git -C "$demo_dir" config user.email "demo@codepreflight.local"
+git -C "$demo_dir" add .
+git -C "$demo_dir" commit -m "Add validated session creation"
+cp evaluation/seeded/auth_validation/after.py "$demo_dir/auth.py"
+git -C "$demo_dir" add auth.py
+cd "$demo_dir"
+preflight init
+preflight status
+preflight review --staged --provider ollama
+```
+
+Replace `ollama` with an available provider shown by `preflight providers`; remote providers
+also require `--approve` after reading the disclosure. If `pytest` is configured as an
+approved repository check, its actual failure is reported separately from the AI findings.
+
+## Safe Git integration
+
+`preflight hooks install pre-commit` and `preflight hooks install pre-push` preview managed
+hook content. Add `--write` to create a hook only when the path is empty or already managed by
+CodePreFlight. An unknown existing hook is never changed; the command returns a manual
+integration snippet instead. Managed hooks can be enabled, disabled, reinstalled, or removed.
+Commits require a reviewed staged fingerprint, an editable message, and explicit final
+approval. CodePreFlight does not push, force-push, merge, rebase, or delete branches.

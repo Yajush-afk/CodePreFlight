@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from codepreflight_engine.hooks import END, START, HookManager
+from codepreflight_engine.hooks import START, HookManager
 
 
 def test_install_preview_does_not_modify_hook(git_repository: Path) -> None:
@@ -11,22 +11,44 @@ def test_install_preview_does_not_modify_hook(git_repository: Path) -> None:
     result = HookManager(git_repository).install("pre-commit", write=False)
 
     assert result["written"] is False
-    assert START in result["preview"]
+    assert result["action"] == "manual_integration"
+    assert START in result["snippet"]
     assert hook.read_text(encoding="utf-8") == original
 
 
-def test_install_and_remove_restores_existing_hook(git_repository: Path) -> None:
+def test_install_never_modifies_an_unknown_existing_hook(git_repository: Path) -> None:
     hook = git_repository / ".git" / "hooks" / "pre-commit"
     original = "#!/bin/sh\necho existing\n"
     hook.write_text(original, encoding="utf-8")
     manager = HookManager(git_repository)
 
+    result = manager.install("pre-commit", write=True)
+
+    assert result["written"] is False
+    assert result["action"] == "manual_integration"
+    assert hook.read_text(encoding="utf-8") == original
+
+
+def test_unknown_hook_without_shebang_also_gets_manual_snippet(git_repository: Path) -> None:
+    hook = git_repository / ".git" / "hooks" / "pre-push"
+    hook.write_text("run-existing-manager\n", encoding="utf-8")
+
+    result = HookManager(git_repository).install("pre-push", write=True)
+
+    assert result["action"] == "manual_integration"
+    assert hook.read_text(encoding="utf-8") == "run-existing-manager\n"
+
+
+def test_reinstall_and_remove_managed_hook(git_repository: Path) -> None:
+    manager = HookManager(git_repository)
     manager.install("pre-commit", write=True)
-    installed = hook.read_text(encoding="utf-8")
-    assert START in installed and END in installed and "echo existing" in installed
+
+    reinstalled = manager.install("pre-commit", write=True)
+    assert reinstalled["written"] is True
+    assert START in (git_repository / ".git" / "hooks" / "pre-commit").read_text()
 
     manager.remove("pre-commit", write=True)
-    assert hook.read_text(encoding="utf-8") == original
+    assert not (git_repository / ".git" / "hooks" / "pre-commit").exists()
 
 
 def test_disable_and_enable_managed_hook(git_repository: Path) -> None:

@@ -49,3 +49,25 @@ def test_diff_explanation_verifies_evidence(
 
     assert result["result"]["summary"].startswith("The staged function")
     assert result["result"]["evidence"] == [{"path": "feature.py", "line": 2, "commit": None}]
+
+
+def test_finding_details_are_local_and_evidence_grounded(git_repository: Path) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("value = False\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+
+    result = RepositoryIntelligence().run(
+        git_repository,
+        {
+            "mode": "finding",
+            "target": "staged",
+            "path": "feature.py",
+            "suggestedTests": ["pytest tests/test_feature.py"],
+        },
+    )
+
+    detail = result["result"]
+    assert detail["path"] == "feature.py"
+    assert "+value = False" in detail["evidenceDiff"]
+    assert detail["history"] == []
+    assert detail["suggestedTests"] == ["pytest tests/test_feature.py"]
