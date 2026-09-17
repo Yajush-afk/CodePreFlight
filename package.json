@@ -1,0 +1,18 @@
+{
+  "name": "codepreflight",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first Git workflow and AI code review tool",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @codepreflight/cli",
+    "check": "npm run check --workspace @codepreflight/cli",
+    "test": "npm run test --workspace @codepreflight/cli",
+    "preflight": "npm run dev --workspace @codepreflight/cli --"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
