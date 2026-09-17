@@ -58,18 +58,24 @@ program
   .command("review")
   .description("review repository changes")
   .option("--staged", "review the staged change set")
+  .option("--branch", "review the current branch against its base")
+  .option("--base <branch>", "override the detected base branch")
   .option("--provider <provider>", "override the configured provider")
   .option("--approve", "approve sending the context package to a remote provider")
+  .option("--hook", "run non-interactively for a managed Git hook")
   .option("--json", "print machine-readable JSON")
   .action(
     async (options: {
       staged?: boolean;
+      branch?: boolean;
+      base?: string;
       provider?: string;
       approve?: boolean;
+      hook?: boolean;
       json?: boolean;
     }) => {
-      if (!options.staged) {
-        process.stderr.write("Phase 2 supports staged review; pass --staged\n");
+      if (options.staged === options.branch) {
+        process.stderr.write("Choose exactly one review target: --staged or --branch\n");
         process.exitCode = 2;
         return;
       }
@@ -78,9 +84,11 @@ program
           "review",
           resolve(process.cwd()),
           {
-            target: "staged",
+            target: options.branch ? "branch" : "staged",
+            base: options.base,
             provider: options.provider,
             remoteApproved: Boolean(options.approve),
+            hook: Boolean(options.hook),
           },
           (event) => {
             if (!options.json && event.event === "progress") {
@@ -90,6 +98,72 @@ program
         );
         if (options.json) printValue(result, true);
         else printReview(result);
+        if (options.hook && Boolean(result.blocking)) process.exitCode = 1;
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 2;
+      }
+    },
+  );
+
+const hooks = program.command("hooks").description("manage CodePreFlight Git hooks safely");
+for (const action of ["install", "remove", "disable", "enable"] as const) {
+  hooks
+    .command(`${action} <hook>`)
+    .description(`${action} a managed pre-commit or pre-push hook`)
+    .option("--write", "apply the previewed hook change")
+    .option("--json", "print machine-readable JSON")
+    .action(async (hook: string, options: { write?: boolean; json?: boolean }) => {
+      try {
+        const result = await client.request("hooks", resolve(process.cwd()), {
+          action,
+          hook,
+          write: Boolean(options.write),
+        });
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 2;
+      }
+    });
+}
+hooks
+  .command("status <hook>")
+  .description("show managed hook status")
+  .option("--json", "print machine-readable JSON")
+  .action(async (hook: string, options: { json?: boolean }) => {
+    try {
+      const result = await client.request("hooks", resolve(process.cwd()), {
+        action: "status",
+        hook,
+      });
+      printValue(result, Boolean(options.json));
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 2;
+    }
+  });
+
+const pr = program.command("pr").description("prepare pull-request review material");
+pr.command("prepare")
+  .description("run a deep branch review and prepare a PR draft")
+  .option("--base <branch>", "override the detected base branch")
+  .option("--provider <provider>", "override the configured provider")
+  .option("--approve", "approve sending the context package to a remote provider")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (options: { base?: string; provider?: string; approve?: boolean; json?: boolean }) => {
+      try {
+        const result = await client.request("pr_prepare", resolve(process.cwd()), {
+          base: options.base,
+          provider: options.provider,
+          remoteApproved: Boolean(options.approve),
+        });
+        if (options.json) printValue(result, true);
+        else {
+          process.stdout.write(`PR title: ${String(result.title)}\n\n${String(result.description)}\n`);
+          printReview(result.review);
+        }
       } catch (error) {
         process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
         process.exitCode = 2;

@@ -15,7 +15,9 @@ class StrictModel(BaseModel):
 class EngineRequest(StrictModel):
     protocolVersion: Literal[1]
     requestId: str = Field(min_length=1)
-    command: Literal["commit", "doctor", "init", "providers", "review", "status"]
+    command: Literal[
+        "commit", "doctor", "hooks", "init", "pr_prepare", "providers", "review", "status"
+    ]
     repositoryPath: str = Field(min_length=1)
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -157,8 +159,14 @@ class ContextManifest(StrictModel):
 class ContextPackage(StrictModel):
     content: str
     manifest: ContextManifest
-    staged_files: list[str]
+    changed_files: list[str]
     checks: list[CheckResult]
+    target: Literal["staged", "branch", "pull_request"] = "staged"
+    base_revision: str | None = None
+
+    @property
+    def staged_files(self) -> list[str]:
+        return self.changed_files
 
 
 class ReviewPreparation(StrictModel):
@@ -229,4 +237,10 @@ class ReviewResult(StrictModel):
 class CommitPreparation(StrictModel):
     message: str
     fingerprint: str
+    review: ReviewResult
+
+
+class PullRequestDraft(StrictModel):
+    title: str
+    description: str
     review: ReviewResult

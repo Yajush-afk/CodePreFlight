@@ -11,9 +11,11 @@ from .commit import create_commit, prepare_commit
 from .config import load_config
 from .doctor import doctor_report
 from .errors import CodePreflightError
+from .hooks import HookManager
 from .initialize import initialize_repository
 from .models import EngineEvent, EngineFailure, EngineRequest
 from .providers import discover_providers
+from .pull_request import prepare_pull_request
 from .repository import RepositoryInspector
 from .review import ReviewOrchestrator
 from .trust import is_trusted
@@ -61,6 +63,15 @@ def dispatch(request: EngineRequest) -> None:
         raise CodePreflightError(
             "invalid_commit_action", "Commit action must be prepare or execute"
         )
+    if request.command == "hooks":
+        snapshot = RepositoryInspector().inspect(path)
+        action = str(request.payload.get("action", "status"))
+        hook = str(request.payload.get("hook", "pre-commit"))
+        result = HookManager(Path(snapshot.root)).apply(
+            action, hook, write=bool(request.payload.get("write", False))
+        )
+        complete(request.requestId, result)
+        return
     if request.command == "init":
         init_root = RepositoryInspector().inspect(path).root
         result = initialize_repository(
@@ -70,15 +81,21 @@ def dispatch(request: EngineRequest) -> None:
         return
     if request.command == "review":
         snapshot = RepositoryInspector().inspect(path)
-        target = request.payload.get("target")
-        if target != "staged":
-            raise CodePreflightError("unsupported_target", "Only staged review is available")
-        review_result = ReviewOrchestrator().review_staged(
+        review_result = ReviewOrchestrator().review(
             Path(snapshot.root),
             request.payload,
             lambda event, payload: request_event(request.requestId, event, payload),
         )
         complete(request.requestId, review_result.model_dump(mode="json"))
+        return
+    if request.command == "pr_prepare":
+        snapshot = RepositoryInspector().inspect(path)
+        draft = prepare_pull_request(
+            Path(snapshot.root),
+            request.payload,
+            lambda event, payload: request_event(request.requestId, event, payload),
+        )
+        complete(request.requestId, draft.model_dump(mode="json"))
         return
     if request.command == "status":
         snapshot = RepositoryInspector().inspect(path)
