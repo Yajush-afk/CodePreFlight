@@ -10,6 +10,7 @@ from typing import Any
 
 from .config import global_config_path, load_config, repository_config_path
 from .errors import CodePreflightError
+from .local_log import local_log_path
 from .protocol_generated import PROTOCOL_VERSION
 from .providers import discover_providers
 
@@ -55,6 +56,11 @@ def doctor_report(repository_path: Path) -> dict[str, Any]:
         },
         "tools": tools,
         "providers": providers,
+        "privacy": {
+            "telemetry": False,
+            "operationalLog": str(local_log_path()),
+            "logContainsRepositoryContent": False,
+        },
         "configuration": {
             "valid": config_error is None,
             "error": config_error,

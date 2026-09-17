@@ -269,9 +269,12 @@ class EngineConnection {
   private killProcessGroup(signal: NodeJS.Signals): void {
     if (this.child.exitCode !== null || this.child.signalCode !== null) return;
     try {
-      if (this.child.pid && process.platform !== "win32")
+      if (this.child.pid && process.platform !== "win32") {
         process.kill(-this.child.pid, signal);
-      else this.child.kill(signal);
+        // macOS can acknowledge a process-group signal before the group leader handles it.
+        // Signal the engine directly as well; descendants still receive the group signal.
+        this.child.kill(signal);
+      } else this.child.kill(signal);
     } catch {
       this.child.kill(signal);
     }

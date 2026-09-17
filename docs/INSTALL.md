@@ -52,4 +52,16 @@ npm unlink --global @codepreflight/cli
 ```
 
 Optional local state can be removed from `.git/codepreflight/`. Global configuration is
-stored under `${XDG_CONFIG_HOME:-$HOME/.config}/codepreflight/`.
+stored under `${XDG_CONFIG_HOME:-$HOME/.config}/codepreflight/`. Bounded local operational
+logs are stored under `${XDG_STATE_HOME:-$HOME/.local/state}/codepreflight/`; deleting that
+directory is optional and does not affect repositories.
+
+## Future bundled packaging boundary
+
+The stable source distribution has two artifacts: the compiled `@codepreflight/cli`
+workspace and the locked `codepreflight-engine` Python environment. A future macOS/Linux
+bundle must preserve the versioned NDJSON protocol between them, run `preflight doctor`
+after installation, install no Git hooks automatically, and keep global configuration and
+state in the same XDG locations. Bundling must not add telemetry, embedded credentials, or a
+persistent local server. Source installation remains the reference behavior until clean
+macOS and Linux CI stays stable.

@@ -102,3 +102,9 @@ CodePreFlight. An unknown existing hook is never changed; the command returns a 
 integration snippet instead. Managed hooks can be enabled, disabled, reinstalled, or removed.
 Commits require a reviewed staged fingerprint, an editable message, and explicit final
 approval. CodePreFlight does not push, force-push, merge, rebase, or delete branches.
+
+Detailed operational documentation:
+
+- [Installation, upgrade, and uninstall](docs/INSTALL.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Privacy, local logs, and threat model](docs/PRIVACY_AND_SECURITY.md)
