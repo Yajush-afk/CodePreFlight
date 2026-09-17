@@ -9,6 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from .adapters import ProviderRegistry
 from .base import BaseResolver
+from .blast_radius import BlastRadiusAnalyzer
 from .config import load_config
 from .context import ContextBuilder
 from .errors import CodePreflightError
@@ -29,6 +30,8 @@ StructuredResponse = TypeVar("StructuredResponse", bound=BaseModel)
 class RepositoryIntelligence:
     def run(self, root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         mode = str(payload.get("mode", "diff"))
+        if mode == "finding":
+            return self._finding_details(root, payload)
         response: ExplanationResponse | RepositoryAnswer
         config = load_config(root)
         adapter = ProviderRegistry(config).adapter(
@@ -107,6 +110,45 @@ class RepositoryIntelligence:
             "mode": mode,
             "provider": adapter.descriptor.model_dump(mode="json"),
             "result": response.model_copy(update={"evidence": verified}).model_dump(mode="json"),
+        }
+
+    def _finding_details(self, root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+        relative = str(payload.get("path", "")).removeprefix("./")
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError as error:
+            raise CodePreflightError(
+                "invalid_finding_path", "Finding path escapes the repository"
+            ) from error
+        if not candidate.is_file():
+            raise CodePreflightError("invalid_finding_path", f"File does not exist: {relative}")
+        target = str(payload.get("target", "staged"))
+        if target not in {"staged", "branch"}:
+            raise CodePreflightError(
+                "unsupported_target", "Finding details require staged or branch"
+            )
+        git = GitRunner(root)
+        if target == "staged":
+            diff = git.run("diff", "--cached", "--no-ext-diff", "--", relative).stdout
+        else:
+            config = load_config(root)
+            base = self._base_revision(root, payload, config)
+            diff = git.run("diff", f"{base}..HEAD", "--no-ext-diff", "--", relative).stdout
+        history = git.run(
+            "log", "-n", "5", "--format=%h %s", "--", relative, check=False
+        ).stdout.strip()
+        related = BlastRadiusAnalyzer().analyze(root, [relative])
+        tests = payload.get("suggestedTests", [])
+        return {
+            "mode": "finding",
+            "result": {
+                "path": relative,
+                "evidenceDiff": diff[:40_000],
+                "relatedFiles": [item.model_dump(mode="json") for item in related],
+                "history": history.splitlines(),
+                "suggestedTests": [str(item) for item in tests] if isinstance(tests, list) else [],
+            },
         }
 
     def _history_context(self, root: Path, payload: dict[str, Any]) -> str:

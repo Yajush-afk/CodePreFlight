@@ -24,15 +24,45 @@ interface SnapshotView {
 }
 
 interface ReviewView {
+  status?: "completed" | "failed";
+  failure?: { message?: string };
   summary?: string;
   findings?: Array<{
     severity?: string;
     title?: string;
+    explanation?: string;
+    impact?: string;
     verification?: string;
-    evidence?: Array<{ path?: string; start_line?: number }>;
+    recommendation?: string;
+    evidence?: Array<{
+      path?: string;
+      start_line?: number;
+      end_line?: number;
+    }>;
+    suggested_tests?: string[];
   }>;
   rejected_findings?: number;
 }
+
+interface FindingDetailView {
+  path?: string;
+  evidenceDiff?: string;
+  relatedFiles?: Array<{
+    path?: string;
+    relationship?: string;
+    confidence?: string;
+  }>;
+  history?: string[];
+  suggestedTests?: string[];
+}
+
+const FILTERS = [
+  "all",
+  "critical",
+  "warning",
+  "suggestion",
+  "informational",
+] as const;
 
 interface DisclosureView {
   provider: string;
@@ -48,6 +78,11 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
   const [review, setReview] = useState<ReviewView | null>(null);
+  const [filterIndex, setFilterIndex] = useState(0);
+  const [selectedFinding, setSelectedFinding] = useState(0);
+  const [findingDetail, setFindingDetail] = useState<FindingDetailView | null>(
+    null,
+  );
   const [disclosure, setDisclosure] = useState<DisclosureView | null>(null);
   const [client] = useState(() => new EngineClient({ persistent: true }));
   const activeRequest = useRef<AbortController | null>(null);
@@ -76,7 +111,7 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
       });
   };
 
-  const runReview = (): void => {
+  const runReview = (remoteApproved = false): void => {
     setError(null);
     setReview(null);
     setDisclosure(null);
@@ -86,7 +121,7 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
       .request(
         "review",
         repositoryPath,
-        { target: "staged", remoteApproved: false },
+        { target: "staged", remoteApproved },
         (event) => {
           if (event.event === "progress") {
             setActivity(String(event.payload?.message ?? "Reviewing…"));
@@ -126,6 +161,44 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
       });
   };
 
+  const filter = FILTERS[filterIndex];
+  const visibleFindings = (review?.findings ?? []).filter(
+    (finding) => filter === "all" || finding.severity === filter,
+  );
+
+  const inspectFinding = (): void => {
+    const finding = visibleFindings[selectedFinding];
+    const evidence = finding?.evidence?.[0];
+    if (!finding || !evidence?.path) return;
+    setActivity(`Loading evidence for ${evidence.path}…`);
+    const request = controller();
+    client
+      .request(
+        "explain",
+        repositoryPath,
+        {
+          mode: "finding",
+          target: "staged",
+          path: evidence.path,
+          suggestedTests: finding.suggested_tests ?? [],
+        },
+        undefined,
+        { signal: request.signal },
+      )
+      .then((response) => {
+        if (activeRequest.current === request) {
+          setFindingDetail(response.result as FindingDetailView);
+          setActivity(null);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (activeRequest.current === request && !request.signal.aborted) {
+          setActivity(null);
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      });
+  };
+
   useEffect(() => {
     refresh();
     return () => {
@@ -141,6 +214,24 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
     }
     if (input === "s") refresh();
     if (input === "r") runReview();
+    if (input === "a" && disclosure) runReview(true);
+    if (input === "f" && review) {
+      setFilterIndex((current) => (current + 1) % FILTERS.length);
+      setSelectedFinding(0);
+      setFindingDetail(null);
+    }
+    if (key.downArrow && visibleFindings.length) {
+      setSelectedFinding((current) =>
+        Math.min(current + 1, visibleFindings.length - 1),
+      );
+      setFindingDetail(null);
+    }
+    if (key.upArrow && visibleFindings.length) {
+      setSelectedFinding((current) => Math.max(current - 1, 0));
+      setFindingDetail(null);
+    }
+    if ((key.return || input === "d") && visibleFindings.length)
+      inspectFinding();
   });
 
   if (error) {
@@ -155,7 +246,11 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
             redactions · {disclosure.scanner}
           </Text>
         )}
-        <Text dimColor>Press s to retry status · q to exit</Text>
+        <Text dimColor>
+          {disclosure
+            ? "Press a to approve this disclosed provider request · s status · q exit"
+            : "Press s to retry status · q to exit"}
+        </Text>
       </Box>
     );
   }
@@ -221,10 +316,19 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
         <Box marginTop={1} flexDirection="column">
           <Text bold>Review</Text>
           <Text>{review.summary ?? "No summary returned."}</Text>
-          {(review.findings ?? []).map((finding, index) => {
+          {review.status === "failed" && (
+            <Text color="red">Review failed: {review.failure?.message}</Text>
+          )}
+          <Text dimColor>
+            Filter: {filter} · {visibleFindings.length} shown
+          </Text>
+          {visibleFindings.map((finding, index) => {
             const evidence = finding.evidence?.[0];
             return (
-              <Text key={`${finding.title}-${index}`}>
+              <Text
+                key={`${finding.title}-${index}`}
+                inverse={index === selectedFinding}
+              >
                 {finding.severity?.toUpperCase()} · {finding.title} ·{" "}
                 {evidence?.path}:{evidence?.start_line} · {finding.verification}
               </Text>
@@ -233,10 +337,49 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
           {(review.findings?.length ?? 0) === 0 && (
             <Text color="green">No verified findings.</Text>
           )}
+          {visibleFindings[selectedFinding] && (
+            <Box marginTop={1} flexDirection="column">
+              <Text bold>Selected finding</Text>
+              <Text>{visibleFindings[selectedFinding].explanation}</Text>
+              <Text>Impact: {visibleFindings[selectedFinding].impact}</Text>
+              <Text>
+                Inspect: {visibleFindings[selectedFinding].recommendation}
+              </Text>
+            </Box>
+          )}
+          {findingDetail && (
+            <Box marginTop={1} flexDirection="column">
+              <Text bold>Evidence diff</Text>
+              <Text>{findingDetail.evidenceDiff || "No diff available."}</Text>
+              <Text bold>Related files</Text>
+              <Text>
+                {findingDetail.relatedFiles?.length
+                  ? findingDetail.relatedFiles
+                      .map(
+                        (item) =>
+                          `${item.path} (${item.relationship}, ${item.confidence})`,
+                      )
+                      .join(" · ")
+                  : "No related files found."}
+              </Text>
+              <Text bold>Relevant history</Text>
+              <Text>
+                {findingDetail.history?.join("\n") || "No history found."}
+              </Text>
+              <Text bold>Suggested tests</Text>
+              <Text>
+                {findingDetail.suggestedTests?.join(" · ") ||
+                  "No tests suggested."}
+              </Text>
+            </Box>
+          )}
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>r review staged · s refresh status · q quit</Text>
+        <Text dimColor>
+          r review · a approve disclosed remote review · f filter · ↑/↓ select ·
+          enter details · s status · q quit
+        </Text>
       </Box>
     </Box>
   );

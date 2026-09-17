@@ -43,10 +43,20 @@ class HookManager:
     def install(self, hook: str, *, write: bool) -> dict[str, Any]:
         path = self.git_dir / "hooks" / hook
         original = self._read(path)
+        if original and START not in original:
+            return {
+                "hook": hook,
+                "action": "manual_integration",
+                "written": False,
+                "path": str(path),
+                "preservedExistingContent": True,
+                "reason": "An unmanaged hook already exists; CodePreFlight did not modify it.",
+                "snippet": self._block(hook) + "\n",
+            }
         if original and not original.startswith("#!"):
             raise CodePreflightError(
                 "hook_without_shebang",
-                f"Existing {hook} hook has no shebang; "
+                f"Managed {hook} hook has no shebang; "
                 "CodePreFlight will not modify it automatically",
             )
         without_managed = BLOCK_PATTERN.sub("\n", original).rstrip()
