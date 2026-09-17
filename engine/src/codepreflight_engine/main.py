@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from .config import load_config
+from .doctor import doctor_report
+from .errors import CodePreflightError
+from .models import EngineEvent, EngineFailure, EngineRequest
+from .providers import discover_providers
+from .repository import RepositoryInspector
+
+
+def emit(event: EngineEvent) -> None:
+    sys.stdout.write(event.model_dump_json(exclude_none=True, by_alias=True) + "\n")
+    sys.stdout.flush()
+
+
+def complete(request_id: str, payload: dict[str, Any]) -> None:
+    emit(EngineEvent(requestId=request_id, event="complete", payload=payload))
+
+
+def dispatch(request: EngineRequest) -> None:
+    path = Path(request.repositoryPath).resolve()
+    if request.command == "doctor":
+        complete(request.requestId, doctor_report(path))
+        return
+    if request.command == "providers":
+        complete(
+            request.requestId,
+            {"providers": [provider.model_dump(mode="json") for provider in discover_providers()]},
+        )
+        return
+    if request.command == "status":
+        snapshot = RepositoryInspector().inspect(path)
+        config = load_config(Path(snapshot.root))
+        complete(
+            request.requestId,
+            {"repository": snapshot.model_dump(mode="json"), "configuration": config},
+        )
+        return
+    raise CodePreflightError("unknown_command", f"Unknown engine command: {request.command}")
+
+
+def handle_line(line: str) -> None:
+    request_id = ""
+    try:
+        raw = json.loads(line)
+        if isinstance(raw, dict):
+            request_id = str(raw.get("requestId", ""))
+        request = EngineRequest.model_validate(raw)
+        dispatch(request)
+    except ValidationError as error:
+        emit(
+            EngineEvent(
+                requestId=request_id,
+                event="error",
+                error=EngineFailure(code="invalid_request", message=str(error), recoverable=False),
+            )
+        )
+    except CodePreflightError as error:
+        emit(
+            EngineEvent(
+                requestId=request_id,
+                event="error",
+                error=EngineFailure(
+                    code=error.code, message=str(error), recoverable=error.recoverable
+                ),
+            )
+        )
+    except Exception as error:  # defensive process boundary
+        emit(
+            EngineEvent(
+                requestId=request_id,
+                event="error",
+                error=EngineFailure(code="internal_error", message=str(error), recoverable=False),
+            )
+        )
+
+
+def main() -> None:
+    for line in sys.stdin:
+        if line.strip():
+            handle_line(line)
+
+
+if __name__ == "__main__":
+    main()

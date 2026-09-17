@@ -45,3 +45,6 @@ temp/
 
 # CodePreFlight local state
 .codepreflight.local.toml
+
+# Build and test fixtures
+.codepreflight/
