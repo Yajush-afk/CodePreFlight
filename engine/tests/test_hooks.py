@@ -38,3 +38,14 @@ def test_disable_and_enable_managed_hook(git_repository: Path) -> None:
 
     manager.set_disabled("pre-push", disabled=False, write=True)
     assert manager.status("pre-push")["disabled"] is False
+
+
+def test_fail_closed_configuration_is_explicit_in_hook(git_repository: Path) -> None:
+    (git_repository / ".codepreflight.toml").write_text(
+        "[hooks]\nfail_closed = true\n", encoding="utf-8"
+    )
+
+    result = HookManager(git_repository).install("pre-commit", write=False)
+
+    assert "blocking (fail-closed)" in result["preview"]
+    assert 'exit "$codepreflight_status"' in result["preview"]

@@ -9,7 +9,14 @@ export function printValue(value: unknown, json: boolean): void {
 interface ReviewView {
   summary?: string;
   blocking?: boolean;
+  cache_hit?: boolean;
   rejected_findings?: number;
+  blast_radius?: Array<{
+    path?: string;
+    relationship?: string;
+    confidence?: string;
+    evidence?: string;
+  }>;
   provider?: { name?: string };
   findings?: Array<{
     severity?: string;
@@ -27,6 +34,7 @@ interface ReviewView {
 export function printReview(value: unknown): void {
   const review = value as ReviewView;
   process.stdout.write(`Provider: ${review.provider?.name ?? "unknown"}\n`);
+  if (review.cache_hit) process.stdout.write("Cache: hit (repository content was not persisted)\n");
   process.stdout.write(`Summary: ${review.summary ?? "No summary returned."}\n`);
   const checks = review.context?.checks ?? [];
   if (checks.length) {
@@ -50,6 +58,69 @@ export function printReview(value: unknown): void {
     }
   }
   if (review.blocking) process.stdout.write("\nReview policy: blocking\n");
+  if (review.blast_radius?.length) {
+    process.stdout.write("\nPotential blast radius\n");
+    for (const item of review.blast_radius) {
+      process.stdout.write(
+        `- ${item.path}: ${item.relationship} (${item.confidence}) · ${item.evidence}\n`,
+      );
+    }
+  }
+}
+
+export function printExplanation(value: unknown): void {
+  const response = value as {
+    mode?: string;
+    result?: {
+      summary?: string;
+      answer?: string;
+      before?: string;
+      after?: string;
+      side_effects?: string[];
+      uncertainty?: string;
+      evidence?: Array<{ path?: string; line?: number; commit?: string }>;
+    };
+  };
+  const result = response.result ?? {};
+  process.stdout.write(`${result.summary ?? result.answer ?? "No explanation returned."}\n`);
+  if (result.before) process.stdout.write(`\nBefore\n${result.before}\n`);
+  if (result.after) process.stdout.write(`\nAfter\n${result.after}\n`);
+  if (result.side_effects?.length) {
+    process.stdout.write(`\nPotential side effects\n${result.side_effects.map((item) => `- ${item}`).join("\n")}\n`);
+  }
+  if (result.evidence?.length) {
+    process.stdout.write(
+      `\nEvidence\n${result.evidence
+        .map((item) => `- ${item.path}${item.line ? `:${item.line}` : ""}${item.commit ? ` @ ${item.commit}` : ""}`)
+        .join("\n")}\n`,
+    );
+  }
+  if (result.uncertainty) process.stdout.write(`\nUncertainty: ${result.uncertainty}\n`);
+}
+
+export function printPanel(value: unknown): void {
+  const panel = value as {
+    results?: Array<{ provider?: string; review?: ReviewView; error?: string }>;
+    consensus?: Array<{
+      providers?: string[];
+      agreement?: number;
+      severity_conflict?: boolean;
+      findings?: ReviewView["findings"];
+    }>;
+  };
+  for (const result of panel.results ?? []) {
+    process.stdout.write(`\nProvider: ${result.provider}\n`);
+    if (result.error) process.stdout.write(`Error: ${result.error}\n`);
+    else if (result.review) printReview(result.review);
+  }
+  process.stdout.write("\nCross-provider comparison\n");
+  for (const group of panel.consensus ?? []) {
+    const finding = group.findings?.[0];
+    process.stdout.write(
+      `- ${finding?.title ?? "Finding"}: ${group.agreement} provider(s) ` +
+        `[${group.providers?.join(", ")}]${group.severity_conflict ? " · severity conflict" : ""}\n`,
+    );
+  }
 }
 
 function formatHuman(value: unknown, indent = 0): string {

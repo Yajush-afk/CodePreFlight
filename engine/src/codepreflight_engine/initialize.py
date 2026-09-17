@@ -6,7 +6,7 @@ from typing import Any
 
 import tomli_w
 
-from .config import repository_config_path
+from .config import load_config, repository_config_path
 from .errors import CodePreflightError
 from .trust import trust_repository
 
@@ -58,13 +58,32 @@ def propose_configuration(root: Path) -> dict[str, Any]:
         ],
         "rules": [],
         "hooks": {"remote_provider_approved": False, "fail_closed": False},
+        "cache": {"enabled": True},
     }
 
 
-def initialize_repository(root: Path, *, write: bool) -> dict[str, Any]:
+def initialize_repository(root: Path, *, write: bool, trust: bool = False) -> dict[str, Any]:
+    if write and trust:
+        raise CodePreflightError(
+            "init_action_conflict", "Choose either --write or --trust, not both"
+        )
+    path = repository_config_path(root)
+    if trust:
+        if not path.exists():
+            raise CodePreflightError(
+                "config_missing", "No .codepreflight.toml exists to trust"
+            )
+        config = load_config(root)
+        trust_repository(root)
+        return {
+            "path": str(path),
+            "written": False,
+            "trusted": True,
+            "configuration": config,
+            "preview": path.read_text(encoding="utf-8"),
+        }
     config = propose_configuration(root)
     rendered = tomli_w.dumps(config)
-    path = repository_config_path(root)
     if write:
         if path.exists():
             raise CodePreflightError(

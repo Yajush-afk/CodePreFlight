@@ -40,6 +40,7 @@ class FindingVerifier:
         successes = 0
         notes: list[str] = []
         valid_locations = 0
+        git = GitRunner(root)
         for evidence in draft.evidence:
             checks += 1
             candidate = (root / evidence.path).resolve()
@@ -48,14 +49,11 @@ class FindingVerifier:
             except ValueError:
                 notes.append(f"Evidence path escapes the repository: {evidence.path}")
                 continue
-            if not candidate.exists() or not candidate.is_file():
-                notes.append(f"Evidence file does not exist: {evidence.path}")
+            content = self._selected_content(git, target, evidence.path)
+            if content is None:
+                notes.append(f"Evidence file does not exist in reviewed state: {evidence.path}")
                 continue
-            try:
-                lines = candidate.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
-                notes.append(f"Evidence file is not readable text: {evidence.path}")
-                continue
+            lines = content.splitlines()
             if (
                 evidence.end_line < evidence.start_line
                 or evidence.start_line > len(lines)
@@ -99,6 +97,11 @@ class FindingVerifier:
             verification=state,
             verification_notes=notes,
         )
+
+    def _selected_content(self, git: GitRunner, target: str, path: str) -> str | None:
+        revision = f":{path}" if target == "staged" else f"HEAD:{path}"
+        result = git.run("show", revision, check=False)
+        return result.stdout if result.returncode == 0 else None
 
     def _changed_lines(
         self, root: Path, target: str, base_revision: str | None

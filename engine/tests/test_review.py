@@ -15,8 +15,10 @@ class FakeAdapter:
     def __init__(self, descriptor: ProviderDescriptor, output: dict[str, object]) -> None:
         self.descriptor = descriptor
         self.output = output
+        self.calls = 0
 
     def review(self, prompt: str, schema: dict[str, object]) -> str:
+        self.calls += 1
         return json.dumps(self.output)
 
 
@@ -98,3 +100,33 @@ def test_remote_provider_requires_explicit_consent(
         )
 
     assert error.value.code == "provider_consent_required"
+
+
+def test_review_cache_avoids_repeating_provider_request(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    adapter = FakeAdapter(descriptor(), {"summary": "No concerns.", "findings": []})
+    install_adapter(monkeypatch, adapter)
+
+    first = ReviewOrchestrator().review_staged(
+        git_repository, {"provider": "ollama"}, lambda event, payload: None
+    )
+    second = ReviewOrchestrator().review_staged(
+        git_repository, {"provider": "ollama"}, lambda event, payload: None
+    )
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert adapter.calls == 1
+
+    source.write_text("value = False\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    changed = ReviewOrchestrator().review_staged(
+        git_repository, {"provider": "ollama"}, lambda event, payload: None
+    )
+
+    assert changed.cache_hit is False
+    assert adapter.calls == 2

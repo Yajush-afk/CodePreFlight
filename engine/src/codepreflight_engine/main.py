@@ -7,13 +7,16 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from .cache import ReviewCache
 from .commit import create_commit, prepare_commit
 from .config import load_config
 from .doctor import doctor_report
 from .errors import CodePreflightError
 from .hooks import HookManager
 from .initialize import initialize_repository
+from .intelligence import RepositoryIntelligence
 from .models import EngineEvent, EngineFailure, EngineRequest
+from .panel import PanelReviewer
 from .providers import discover_providers
 from .pull_request import prepare_pull_request
 from .repository import RepositoryInspector
@@ -39,6 +42,17 @@ def dispatch(request: EngineRequest) -> None:
     if request.command == "doctor":
         complete(request.requestId, doctor_report(path))
         return
+    if request.command == "cache":
+        snapshot = RepositoryInspector().inspect(path)
+        cache = ReviewCache(Path(snapshot.root))
+        action = request.payload.get("action", "status")
+        if action == "status":
+            complete(request.requestId, cache.status())
+            return
+        if action == "clear":
+            complete(request.requestId, cache.clear())
+            return
+        raise CodePreflightError("invalid_cache_action", "Cache action must be status or clear")
     if request.command == "providers":
         complete(
             request.requestId,
@@ -72,10 +86,17 @@ def dispatch(request: EngineRequest) -> None:
         )
         complete(request.requestId, result)
         return
+    if request.command == "explain":
+        snapshot = RepositoryInspector().inspect(path)
+        result = RepositoryIntelligence().run(Path(snapshot.root), request.payload)
+        complete(request.requestId, result)
+        return
     if request.command == "init":
         init_root = RepositoryInspector().inspect(path).root
         result = initialize_repository(
-            Path(init_root), write=bool(request.payload.get("write", False))
+            Path(init_root),
+            write=bool(request.payload.get("write", False)),
+            trust=bool(request.payload.get("trust", False)),
         )
         complete(request.requestId, result)
         return
@@ -87,6 +108,15 @@ def dispatch(request: EngineRequest) -> None:
             lambda event, payload: request_event(request.requestId, event, payload),
         )
         complete(request.requestId, review_result.model_dump(mode="json"))
+        return
+    if request.command == "panel_review":
+        snapshot = RepositoryInspector().inspect(path)
+        panel = PanelReviewer().review(
+            Path(snapshot.root),
+            request.payload,
+            lambda event, payload: request_event(request.requestId, event, payload),
+        )
+        complete(request.requestId, panel.model_dump(mode="json"))
         return
     if request.command == "pr_prepare":
         snapshot = RepositoryInspector().inspect(path)

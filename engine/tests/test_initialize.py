@@ -17,3 +17,15 @@ def test_preview_does_not_write_configuration(git_repository: Path) -> None:
 
     assert result["written"] is False
     assert not (git_repository / ".codepreflight.toml").exists()
+
+
+def test_existing_configuration_can_be_reviewed_and_retrusted(git_repository: Path) -> None:
+    initialize_repository(git_repository, write=True)
+    config = git_repository / ".codepreflight.toml"
+    config.write_text(config.read_text(encoding="utf-8") + '\nrules = ["Public APIs need tests"]\n')
+    assert is_trusted(git_repository) is False
+
+    result = initialize_repository(git_repository, write=False, trust=True)
+
+    assert result["trusted"] is True
+    assert is_trusted(git_repository) is True
