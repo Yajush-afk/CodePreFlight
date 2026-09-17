@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from .commit import create_commit, prepare_commit
 from .config import load_config
 from .doctor import doctor_report
 from .errors import CodePreflightError
@@ -42,9 +43,29 @@ def dispatch(request: EngineRequest) -> None:
             {"providers": [provider.model_dump(mode="json") for provider in discover_providers()]},
         )
         return
+    if request.command == "commit":
+        snapshot = RepositoryInspector().inspect(path)
+        root = Path(snapshot.root)
+        action = request.payload.get("action")
+        if action == "prepare":
+            preparation = prepare_commit(
+                root,
+                request.payload,
+                lambda event, payload: request_event(request.requestId, event, payload),
+            )
+            complete(request.requestId, preparation.model_dump(mode="json"))
+            return
+        if action == "execute":
+            complete(request.requestId, create_commit(root, request.payload))
+            return
+        raise CodePreflightError(
+            "invalid_commit_action", "Commit action must be prepare or execute"
+        )
     if request.command == "init":
-        root = RepositoryInspector().inspect(path).root
-        result = initialize_repository(Path(root), write=bool(request.payload.get("write", False)))
+        init_root = RepositoryInspector().inspect(path).root
+        result = initialize_repository(
+            Path(init_root), write=bool(request.payload.get("write", False))
+        )
         complete(request.requestId, result)
         return
     if request.command == "review":
