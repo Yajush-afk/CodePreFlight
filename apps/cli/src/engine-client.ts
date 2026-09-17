@@ -82,6 +82,10 @@ export class EngineClient {
     });
   }
 
+  status(repositoryPath: string, onEvent?: (event: EngineEvent) => void) {
+    return this.request("status", repositoryPath, {}, onEvent);
+  }
+
   private startEngine(): ChildProcessWithoutNullStreams {
     const configured = process.env.CODEPREFLIGHT_ENGINE_COMMAND;
     if (configured) {

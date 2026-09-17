@@ -13,7 +13,7 @@
       "properties": {
         "protocolVersion": { "const": 1 },
         "requestId": { "type": "string", "minLength": 1 },
-        "command": { "enum": ["doctor", "providers", "status"] },
+        "command": { "enum": ["doctor", "init", "providers", "review", "status"] },
         "repositoryPath": { "type": "string", "minLength": 1 },
         "payload": { "type": "object" }
       },
@@ -25,7 +25,7 @@
       "properties": {
         "protocolVersion": { "const": 1 },
         "requestId": { "type": "string" },
-        "event": { "enum": ["ready", "progress", "complete", "error"] },
+        "event": { "enum": ["ready", "progress", "consent_required", "provider_delta", "finding", "complete", "error"] },
         "payload": { "type": "object" },
         "error": {
           "type": "object",
