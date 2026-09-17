@@ -33,6 +33,8 @@ def is_trusted(root: Path) -> bool:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
+    if not isinstance(value, dict):
+        return False
     return (
         value.get("repository") == str(root.resolve())
         and value.get("remote") == remote_identity(root)

@@ -92,8 +92,9 @@ class ClaudeCliAdapter:
                 raise CodePreflightError(
                     "provider_output_invalid", "Claude Code returned invalid JSON"
                 ) from error
-            if isinstance(value, dict) and isinstance(value.get("result"), str):
-                return value["result"]
+            result_text = value.get("result") if isinstance(value, dict) else None
+            if isinstance(result_text, str):
+                return result_text
             raise CodePreflightError(
                 "provider_output_invalid", "Claude Code response did not contain a result"
             )

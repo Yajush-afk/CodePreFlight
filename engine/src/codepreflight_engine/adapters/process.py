@@ -54,13 +54,22 @@ def run_provider_process(
         )
     except subprocess.TimeoutExpired as error:
         raise CodePreflightError(
-            "provider_timeout", f"Provider timed out after {timeout} seconds"
+            "provider_timeout",
+            f"Provider timed out after {timeout} seconds",
+            recoverable=True,
         ) from error
     except OSError as error:
         raise CodePreflightError("provider_process_error", str(error)) from error
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "provider command failed"
-        raise CodePreflightError("provider_error", detail[-2000:])
+        lowered = detail.lower()
+        if any(marker in lowered for marker in ("unauthorized", "authentication", "log in")):
+            code = "provider_authentication_failed"
+        elif any(marker in lowered for marker in ("rate limit", "too many requests", "quota")):
+            code = "provider_rate_limited"
+        else:
+            code = "provider_error"
+        raise CodePreflightError(code, detail[-2000:], recoverable=True)
     return result
 
 

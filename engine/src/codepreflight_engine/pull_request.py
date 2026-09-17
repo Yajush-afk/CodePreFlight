@@ -33,7 +33,9 @@ def prepare_pull_request(
         if finding.severity in {Severity.CRITICAL, Severity.WARNING}
     ]
     risk_text = (
-        "\n".join(
+        "- AI review did not complete: structured provider output remained invalid after repair."
+        if review.status == "failed"
+        else "\n".join(
             f"- **{finding.severity.value.title()}**: {finding.title} "
             f"(`{finding.evidence[0].path}:{finding.evidence[0].start_line}`)"
             for finding in risks
