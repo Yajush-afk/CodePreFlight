@@ -10,9 +10,12 @@ from pydantic import ValidationError
 from .config import load_config
 from .doctor import doctor_report
 from .errors import CodePreflightError
+from .initialize import initialize_repository
 from .models import EngineEvent, EngineFailure, EngineRequest
 from .providers import discover_providers
 from .repository import RepositoryInspector
+from .review import ReviewOrchestrator
+from .trust import is_trusted
 
 
 def emit(event: EngineEvent) -> None:
@@ -22,6 +25,10 @@ def emit(event: EngineEvent) -> None:
 
 def complete(request_id: str, payload: dict[str, Any]) -> None:
     emit(EngineEvent(requestId=request_id, event="complete", payload=payload))
+
+
+def request_event(request_id: str, event: str, payload: dict[str, Any]) -> None:
+    emit(EngineEvent(requestId=request_id, event=event, payload=payload))  # type: ignore[arg-type]
 
 
 def dispatch(request: EngineRequest) -> None:
@@ -35,12 +42,33 @@ def dispatch(request: EngineRequest) -> None:
             {"providers": [provider.model_dump(mode="json") for provider in discover_providers()]},
         )
         return
+    if request.command == "init":
+        root = RepositoryInspector().inspect(path).root
+        result = initialize_repository(Path(root), write=bool(request.payload.get("write", False)))
+        complete(request.requestId, result)
+        return
+    if request.command == "review":
+        snapshot = RepositoryInspector().inspect(path)
+        target = request.payload.get("target")
+        if target != "staged":
+            raise CodePreflightError("unsupported_target", "Only staged review is available")
+        review_result = ReviewOrchestrator().review_staged(
+            Path(snapshot.root),
+            request.payload,
+            lambda event, payload: request_event(request.requestId, event, payload),
+        )
+        complete(request.requestId, review_result.model_dump(mode="json"))
+        return
     if request.command == "status":
         snapshot = RepositoryInspector().inspect(path)
         config = load_config(Path(snapshot.root))
         complete(
             request.requestId,
-            {"repository": snapshot.model_dump(mode="json"), "configuration": config},
+            {
+                "repository": snapshot.model_dump(mode="json"),
+                "configuration": config,
+                "trusted": is_trusted(Path(snapshot.root)),
+            },
         )
         return
     raise CodePreflightError("unknown_command", f"Unknown engine command: {request.command}")

@@ -1,6 +1,6 @@
 export const PROTOCOL_VERSION = 1 as const;
 
-export type EngineCommand = "doctor" | "providers" | "status";
+export type EngineCommand = "doctor" | "init" | "providers" | "review" | "status";
 
 export interface EngineRequest {
   protocolVersion: typeof PROTOCOL_VERSION;
@@ -20,7 +20,14 @@ export interface EngineError {
 export interface EngineEvent {
   protocolVersion: typeof PROTOCOL_VERSION;
   requestId: string;
-  event: "ready" | "progress" | "complete" | "error";
+  event:
+    | "ready"
+    | "progress"
+    | "consent_required"
+    | "provider_delta"
+    | "finding"
+    | "complete"
+    | "error";
   payload?: Record<string, unknown>;
   error?: EngineError;
 }
