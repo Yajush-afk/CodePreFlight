@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "description": "Seeded review scenarios. These cases define expectations, not published model scores.",
+  "cases": [
+    {
+      "id": "auth-validation-regression",
+      "category": "authentication",
+      "change": "An authentication endpoint removes token validation before creating a session.",
+      "expected": ["warning-or-critical correctness or security finding", "changed-line evidence"]
+    },
+    {
+      "id": "schema-without-migration",
+      "category": "database",
+      "change": "A persisted model gains a required field without a corresponding migration.",
+      "expected": ["migration mismatch finding", "model and migration evidence"]
+    },
+    {
+      "id": "public-api-break",
+      "category": "compatibility",
+      "change": "A public function removes a previously required response field.",
+      "expected": ["backward compatibility finding", "interface or caller evidence"]
+    },
+    {
+      "id": "resource-leak",
+      "category": "reliability",
+      "change": "A new early return leaves an opened resource unclosed.",
+      "expected": ["resource lifecycle finding", "control-flow evidence"]
+    },
+    {
+      "id": "missing-direct-test",
+      "category": "testing",
+      "change": "Behavior changes without modifying or adding its directly related tests.",
+      "expected": ["test coverage finding or test suggestion", "related test evidence"]
+    },
+    {
+      "id": "accidental-secret",
+      "category": "privacy",
+      "change": "A recognizable credential is introduced in a staged configuration file.",
+      "expected": ["local redaction before provider invocation"]
+    },
+    {
+      "id": "hallucinated-location",
+      "category": "verification",
+      "change": "A fake provider cites a file or changed line that does not exist.",
+      "expected": ["finding rejected during local verification"]
+    },
+    {
+      "id": "safe-refactor",
+      "category": "negative-control",
+      "change": "A behavior-preserving rename updates implementation and tests consistently.",
+      "expected": ["no meaningful finding"]
+    }
+  ]
+}

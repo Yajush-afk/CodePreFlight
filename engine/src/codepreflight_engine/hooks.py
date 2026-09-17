@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .config import load_config
 from .errors import CodePreflightError
 from .git import GitRunner
 
@@ -122,6 +123,13 @@ class HookManager:
 
     def _block(self, hook: str) -> str:
         review_args = "--staged" if hook == "pre-commit" else "--branch"
+        fail_closed = bool(load_config(self.root).get("hooks", {}).get("fail_closed", False))
+        failure_action = (
+            '    echo "CodePreFlight review failed operationally; blocking (fail-closed)." >&2\n'
+            '    exit "$codepreflight_status"'
+            if fail_closed
+            else '    echo "CodePreFlight review failed operationally; continuing (fail-open)." >&2'
+        )
         return "\n".join(
             [
                 START,
@@ -131,7 +139,7 @@ class HookManager:
                 f"  preflight review {review_args} --hook || codepreflight_status=$?",
                 '  if [ "$codepreflight_status" -eq 1 ]; then exit 1; fi',
                 '  if [ "$codepreflight_status" -gt 1 ]; then',
-                '    echo "CodePreFlight review failed operationally; continuing (fail-open)." >&2',
+                failure_action,
                 "  fi",
                 "fi",
                 END,

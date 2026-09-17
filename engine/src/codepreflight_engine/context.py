@@ -75,21 +75,14 @@ class ContextBuilder:
         sections.append(f"## {target.replace('_', ' ').title()} diff\n" + diff)
 
         for relative in review_files:
-            path = root / relative
-            if not path.exists():
+            content = self._selected_content(git, target, relative)
+            if content is None:
                 entries.append(
                     ContextEntry(
                         path=relative,
-                        reason="deleted file represented by staged diff",
+                        reason="deleted file represented by selected diff",
                         status="included",
                     )
-                )
-                continue
-            try:
-                content = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                entries.append(
-                    ContextEntry(path=relative, reason="not readable as text", status="excluded")
                 )
                 continue
             excerpt = self._relevant_excerpt(diff, relative, content)
@@ -158,6 +151,16 @@ class ContextBuilder:
             target=target,
             base_revision=base_revision,
         )
+
+    def _selected_content(
+        self,
+        git: GitRunner,
+        target: Literal["staged", "branch", "pull_request"],
+        relative: str,
+    ) -> str | None:
+        revision = f":{relative}" if target == "staged" else f"HEAD:{relative}"
+        result = git.run("show", revision, check=False)
+        return result.stdout if result.returncode == 0 else None
 
     def _diff_args(
         self,

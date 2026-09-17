@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import React from "react";
 import { render } from "ink";
 import { EngineClient } from "./engine-client.js";
-import { printReview, printValue } from "./format.js";
+import { printExplanation, printPanel, printReview, printValue } from "./format.js";
 import { App } from "./tui.js";
 
 const program = new Command();
@@ -41,11 +41,13 @@ program
   .command("init")
   .description("detect and configure CodePreFlight for this repository")
   .option("--write", "write the proposed repository configuration and trust it")
+  .option("--trust", "trust an existing repository configuration after reviewing it")
   .option("--json", "print machine-readable JSON")
-  .action(async (options: { write?: boolean; json?: boolean }) => {
+  .action(async (options: { write?: boolean; trust?: boolean; json?: boolean }) => {
     try {
       const result = await client.request("init", resolve(process.cwd()), {
         write: Boolean(options.write),
+        trust: Boolean(options.trust),
       });
       printValue(result, Boolean(options.json));
     } catch (error) {
@@ -62,6 +64,7 @@ program
   .option("--base <branch>", "override the detected base branch")
   .option("--provider <provider>", "override the configured provider")
   .option("--approve", "approve sending the context package to a remote provider")
+  .option("--no-cache", "bypass and replace a cached review")
   .option("--hook", "run non-interactively for a managed Git hook")
   .option("--json", "print machine-readable JSON")
   .action(
@@ -71,6 +74,7 @@ program
       base?: string;
       provider?: string;
       approve?: boolean;
+      cache?: boolean;
       hook?: boolean;
       json?: boolean;
     }) => {
@@ -88,6 +92,7 @@ program
             base: options.base,
             provider: options.provider,
             remoteApproved: Boolean(options.approve),
+            noCache: options.cache === false,
             hook: Boolean(options.hook),
           },
           (event) => {
@@ -164,6 +169,152 @@ pr.command("prepare")
           process.stdout.write(`PR title: ${String(result.title)}\n\n${String(result.description)}\n`);
           printReview(result.review);
         }
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 2;
+      }
+    },
+  );
+
+const cache = program.command("cache").description("inspect or clear the local review cache");
+for (const action of ["status", "clear"] as const) {
+  cache
+    .command(action)
+    .description(`${action} the privacy-safe local review cache`)
+    .option("--json", "print machine-readable JSON")
+    .action(async (options: { json?: boolean }) => {
+      try {
+        const result = await client.request("cache", resolve(process.cwd()), { action });
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 2;
+      }
+    });
+}
+
+const explain = program.command("explain").description("explain repository changes and history");
+for (const mode of ["diff", "branch"] as const) {
+  explain
+    .command(mode)
+    .description(`explain the current ${mode === "diff" ? "staged diff" : "branch"}`)
+    .option("--base <branch>", "override the detected base branch")
+    .option("--provider <provider>", "override the configured provider")
+    .option("--approve", "approve sending evidence to a remote provider")
+    .option("--json", "print machine-readable JSON")
+    .action(
+      async (options: { base?: string; provider?: string; approve?: boolean; json?: boolean }) => {
+        try {
+          const result = await client.request("explain", resolve(process.cwd()), {
+            mode,
+            base: options.base,
+            provider: options.provider,
+            remoteApproved: Boolean(options.approve),
+          });
+          if (options.json) printValue(result, true);
+          else printExplanation(result);
+        } catch (error) {
+          process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+          process.exitCode = 2;
+        }
+      },
+    );
+}
+explain
+  .command("history <path>")
+  .description("explain why a file or selected line reached its current state")
+  .option("--line <line>", "line number to explain", Number)
+  .option("--provider <provider>", "override the configured provider")
+  .option("--approve", "approve sending evidence to a remote provider")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (
+      path: string,
+      options: { line?: number; provider?: string; approve?: boolean; json?: boolean },
+    ) => {
+      try {
+        const result = await client.request("explain", resolve(process.cwd()), {
+          mode: "history",
+          path,
+          line: options.line,
+          provider: options.provider,
+          remoteApproved: Boolean(options.approve),
+        });
+        if (options.json) printValue(result, true);
+        else printExplanation(result);
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 2;
+      }
+    },
+  );
+
+program
+  .command("ask <question>")
+  .description("ask a question scoped to the current repository changes")
+  .option("--branch", "use the branch change set instead of staged changes")
+  .option("--base <branch>", "override the detected base branch")
+  .option("--provider <provider>", "override the configured provider")
+  .option("--approve", "approve sending evidence to a remote provider")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (
+      question: string,
+      options: {
+        branch?: boolean;
+        base?: string;
+        provider?: string;
+        approve?: boolean;
+        json?: boolean;
+      },
+    ) => {
+      try {
+        const result = await client.request("explain", resolve(process.cwd()), {
+          mode: "ask",
+          question,
+          target: options.branch ? "branch" : "staged",
+          base: options.base,
+          provider: options.provider,
+          remoteApproved: Boolean(options.approve),
+        });
+        if (options.json) printValue(result, true);
+        else printExplanation(result);
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 2;
+      }
+    },
+  );
+
+program
+  .command("panel")
+  .description("compare independent reviews from multiple providers")
+  .requiredOption("--providers <providers>", "comma-separated provider identifiers")
+  .option("--branch", "review the branch instead of staged changes")
+  .option("--base <branch>", "override the detected base branch")
+  .option("--approve", "approve sending evidence to remote providers")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (options: {
+      providers: string;
+      branch?: boolean;
+      base?: string;
+      approve?: boolean;
+      json?: boolean;
+    }) => {
+      try {
+        const providers = options.providers
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+        const result = await client.request("panel_review", resolve(process.cwd()), {
+          providers,
+          target: options.branch ? "branch" : "staged",
+          base: options.base,
+          remoteApproved: Boolean(options.approve),
+        });
+        if (options.json) printValue(result, true);
+        else printPanel(result);
       } catch (error) {
         process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
         process.exitCode = 2;

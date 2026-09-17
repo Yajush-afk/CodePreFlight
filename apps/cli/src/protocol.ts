@@ -1,10 +1,13 @@
 export const PROTOCOL_VERSION = 1 as const;
 
 export type EngineCommand =
+  | "cache"
   | "commit"
   | "doctor"
+  | "explain"
   | "hooks"
   | "init"
+  | "panel_review"
   | "pr_prepare"
   | "providers"
   | "review"

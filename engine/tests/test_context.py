@@ -38,3 +38,18 @@ def test_respects_ignore_rules(git_repository: Path) -> None:
     entry = next(item for item in package.manifest.entries if item.path == "generated.js")
     assert entry.status == "excluded"
     assert "const generated" not in package.content
+
+
+def test_staged_context_excludes_unstaged_edits(git_repository: Path) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("value = 'staged'\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    source.write_text("value = 'unstaged-secret-behavior'\n", encoding="utf-8")
+
+    package = ContextBuilder().build(
+        git_repository,
+        {"review": {"context_limit": 60000}, "ignore": [], "checks": [], "rules": []},
+    )
+
+    assert "value = 'staged'" in package.content
+    assert "unstaged-secret-behavior" not in package.content

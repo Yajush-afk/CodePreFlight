@@ -16,7 +16,17 @@ class EngineRequest(StrictModel):
     protocolVersion: Literal[1]
     requestId: str = Field(min_length=1)
     command: Literal[
-        "commit", "doctor", "hooks", "init", "pr_prepare", "providers", "review", "status"
+        "cache",
+        "commit",
+        "doctor",
+        "explain",
+        "hooks",
+        "init",
+        "panel_review",
+        "pr_prepare",
+        "providers",
+        "review",
+        "status",
     ]
     repositoryPath: str = Field(min_length=1)
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -224,6 +234,13 @@ class ProviderReviewResponse(StrictModel):
     findings: list[FindingDraft] = Field(default_factory=list)
 
 
+class BlastRadiusItem(StrictModel):
+    path: str
+    relationship: str
+    evidence: str
+    confidence: Literal["confirmed", "inferred"]
+
+
 class ReviewResult(StrictModel):
     provider: ProviderDescriptor
     summary: str
@@ -232,6 +249,8 @@ class ReviewResult(StrictModel):
     context: ContextPackage
     blocking: bool
     fingerprint: str
+    cache_hit: bool = False
+    blast_radius: list[BlastRadiusItem] = Field(default_factory=list)
 
 
 class CommitPreparation(StrictModel):
@@ -244,3 +263,42 @@ class PullRequestDraft(StrictModel):
     title: str
     description: str
     review: ReviewResult
+
+
+class ExplanationEvidence(StrictModel):
+    path: str
+    line: int | None = None
+    commit: str | None = None
+
+
+class ExplanationResponse(StrictModel):
+    summary: str
+    before: str | None = None
+    after: str | None = None
+    side_effects: list[str] = Field(default_factory=list)
+    evidence: list[ExplanationEvidence] = Field(default_factory=list)
+
+
+class RepositoryAnswer(StrictModel):
+    answer: str
+    evidence: list[ExplanationEvidence] = Field(default_factory=list)
+    uncertainty: str | None = None
+
+
+class ConsensusFinding(StrictModel):
+    key: str
+    providers: list[str]
+    findings: list[Finding]
+    agreement: int
+    severity_conflict: bool
+
+
+class PanelProviderResult(StrictModel):
+    provider: str
+    review: ReviewResult | None = None
+    error: str | None = None
+
+
+class PanelReviewResult(StrictModel):
+    results: list[PanelProviderResult]
+    consensus: list[ConsensusFinding]
