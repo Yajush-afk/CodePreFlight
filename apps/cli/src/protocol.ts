@@ -1,6 +1,14 @@
 export const PROTOCOL_VERSION = 1 as const;
 
-export type EngineCommand = "commit" | "doctor" | "init" | "providers" | "review" | "status";
+export type EngineCommand =
+  | "commit"
+  | "doctor"
+  | "hooks"
+  | "init"
+  | "pr_prepare"
+  | "providers"
+  | "review"
+  | "status";
 
 export interface EngineRequest {
   protocolVersion: typeof PROTOCOL_VERSION;

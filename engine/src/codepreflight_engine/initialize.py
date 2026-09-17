@@ -57,6 +57,7 @@ def propose_configuration(root: Path) -> dict[str, Any]:
             "*.lock",
         ],
         "rules": [],
+        "hooks": {"remote_provider_approved": False, "fail_closed": False},
     }
 
 

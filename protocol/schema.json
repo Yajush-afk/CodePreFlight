@@ -13,7 +13,7 @@
       "properties": {
         "protocolVersion": { "const": 1 },
         "requestId": { "type": "string", "minLength": 1 },
-        "command": { "enum": ["commit", "doctor", "init", "providers", "review", "status"] },
+        "command": { "enum": ["commit", "doctor", "hooks", "init", "pr_prepare", "providers", "review", "status"] },
         "repositoryPath": { "type": "string", "minLength": 1 },
         "payload": { "type": "object" }
       },

@@ -13,11 +13,18 @@ from .models import (
 
 
 class FindingVerifier:
-    def verify(self, root: Path, drafts: list[FindingDraft]) -> tuple[list[Finding], int]:
+    def verify(
+        self,
+        root: Path,
+        drafts: list[FindingDraft],
+        *,
+        target: str = "staged",
+        base_revision: str | None = None,
+    ) -> tuple[list[Finding], int]:
         verified: list[Finding] = []
         rejected = 0
         for draft in drafts:
-            finding = self._verify_one(root, draft)
+            finding = self._verify_one(root, draft, target, base_revision)
             if finding.verification == VerificationState.REJECTED:
                 rejected += 1
                 continue
@@ -25,8 +32,10 @@ class FindingVerifier:
                 verified.append(finding)
         return verified, rejected
 
-    def _verify_one(self, root: Path, draft: FindingDraft) -> Finding:
-        changed_lines = self._changed_lines(root)
+    def _verify_one(
+        self, root: Path, draft: FindingDraft, target: str, base_revision: str | None
+    ) -> Finding:
+        changed_lines = self._changed_lines(root, target, base_revision)
         checks = 0
         successes = 0
         notes: list[str] = []
@@ -91,8 +100,11 @@ class FindingVerifier:
             verification_notes=notes,
         )
 
-    def _changed_lines(self, root: Path) -> dict[str, set[int]]:
-        diff = GitRunner(root).run("diff", "--cached", "--unified=0", "--no-ext-diff").stdout
+    def _changed_lines(
+        self, root: Path, target: str, base_revision: str | None
+    ) -> dict[str, set[int]]:
+        args = ["diff", "--cached"] if target == "staged" else ["diff", f"{base_revision}..HEAD"]
+        diff = GitRunner(root).run(*args, "--unified=0", "--no-ext-diff").stdout
         changed: dict[str, set[int]] = {}
         current: str | None = None
         for line in diff.splitlines():

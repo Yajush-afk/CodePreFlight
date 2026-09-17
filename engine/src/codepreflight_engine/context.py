@@ -32,15 +32,23 @@ BINARY_SUFFIXES = {
 
 
 class ContextBuilder:
-    def build(self, root: Path, config: dict[str, Any]) -> ContextPackage:
+    def build(
+        self,
+        root: Path,
+        config: dict[str, Any],
+        *,
+        target: Literal["staged", "branch", "pull_request"] = "staged",
+        base_revision: str | None = None,
+    ) -> ContextPackage:
         git = GitRunner(root)
-        staged_files = [
-            path
-            for path in git.run("diff", "--cached", "--name-only", "-z").stdout.split("\0")
-            if path
+        diff_args = self._diff_args(target, base_revision)
+        changed_files = [
+            path for path in git.run(*diff_args, "--name-only", "-z").stdout.split("\0") if path
         ]
-        if not staged_files:
-            raise CodePreflightError("empty_change_set", "There are no staged changes to review")
+        if not changed_files:
+            raise CodePreflightError(
+                "empty_change_set", f"There are no {target.replace('_', ' ')} changes to review"
+            )
 
         limit = int(config.get("review", {}).get("context_limit", 60000))
         ignore = config.get("ignore", [])
@@ -51,7 +59,7 @@ class ContextBuilder:
         sections: list[str] = []
 
         review_files: list[str] = []
-        for relative in staged_files:
+        for relative in changed_files:
             if matcher.match_file(relative):
                 entries.append(ContextEntry(path=relative, reason="ignore rule", status="excluded"))
             elif Path(relative).suffix.lower() in BINARY_SUFFIXES:
@@ -60,11 +68,11 @@ class ContextBuilder:
                 review_files.append(relative)
 
         diff = (
-            git.run("diff", "--cached", "--no-ext-diff", "--unified=5", "--", *review_files).stdout
+            git.run(*diff_args, "--no-ext-diff", "--unified=5", "--", *review_files).stdout
             if review_files
             else ""
         )
-        sections.append("## Staged diff\n" + diff)
+        sections.append(f"## {target.replace('_', ' ').title()} diff\n" + diff)
 
         for relative in review_files:
             path = root / relative
@@ -93,7 +101,7 @@ class ContextBuilder:
             entries.append(
                 ContextEntry(
                     path=relative,
-                    reason="staged file context",
+                    reason=f"{target.replace('_', ' ')} file context",
                     included_characters=len(excerpt),
                     status=status,
                 )
@@ -107,6 +115,12 @@ class ContextBuilder:
                 f"### {result.name}: {result.status.value}\n{result.output}" for result in checks
             )
             sections.append("## Deterministic checks\n" + check_text)
+        if target == "pull_request" and base_revision:
+            history = git.run(
+                "log", "--format=%h %s", f"{base_revision}..HEAD", check=False
+            ).stdout.strip()
+            if history:
+                sections.append("## Branch commits\n" + history)
 
         content = "\n\n".join(sections)
         redacted = redact_secrets(content)
@@ -139,9 +153,24 @@ class ContextBuilder:
                 limit_characters=limit,
                 redactions=redacted.count,
             ),
-            staged_files=staged_files,
+            changed_files=changed_files,
             checks=checks,
+            target=target,
+            base_revision=base_revision,
         )
+
+    def _diff_args(
+        self,
+        target: Literal["staged", "branch", "pull_request"],
+        base_revision: str | None,
+    ) -> tuple[str, ...]:
+        if target == "staged":
+            return ("diff", "--cached")
+        if not base_revision:
+            raise CodePreflightError(
+                "base_branch_required", f"A base revision is required for {target} review"
+            )
+        return ("diff", f"{base_revision}..HEAD")
 
     def _relevant_excerpt(self, diff: str, relative: str, content: str) -> str:
         marker = f"+++ b/{relative}"
