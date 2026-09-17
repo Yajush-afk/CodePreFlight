@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from .adapters import ProviderRegistry
+from .base import BaseResolver
 from .blast_radius import BlastRadiusAnalyzer
 from .cache import ReviewCache
 from .config import load_config
 from .context import ContextBuilder
 from .errors import CodePreflightError
 from .finding_schema import parse_provider_response, provider_output_schema
-from .git import GitRunner
 from .models import (
     BlastRadiusItem,
     Finding,
@@ -54,7 +54,7 @@ class ReviewOrchestrator:
         target = str(payload.get("target", "staged"))
         if target not in {"staged", "branch", "pull_request"}:
             raise CodePreflightError("unsupported_target", f"Unsupported review target: {target}")
-        base_revision = self._base_revision(root, payload) if target != "staged" else None
+        base_revision = self._base_revision(root, payload, config) if target != "staged" else None
         emit("progress", {"message": f"Building focused {target.replace('_', ' ')} context"})
         context = ContextBuilder().build(
             root,
@@ -188,26 +188,15 @@ class ReviewOrchestrator:
         )
         return hashlib.sha256(material.encode()).hexdigest()
 
-    def _base_revision(self, root: Path, payload: dict[str, Any]) -> str:
-        git = GitRunner(root)
-        base = payload.get("base")
-        if not base:
-            from .repository import RepositoryInspector
-
-            base = RepositoryInspector().inspect(root).base_branch
-        if not base:
-            raise CodePreflightError(
-                "base_branch_required", "Base branch could not be detected; pass --base explicitly"
-            )
-        result = git.run("merge-base", "HEAD", str(base), check=False)
-        if result.returncode != 0 or not result.stdout.strip():
-            remote_base = f"origin/{base}"
-            result = git.run("merge-base", "HEAD", remote_base, check=False)
-        if result.returncode != 0 or not result.stdout.strip():
-            raise CodePreflightError(
-                "base_branch_invalid", f"Could not determine a merge base with {base}"
-            )
-        return result.stdout.strip()
+    def _base_revision(self, root: Path, payload: dict[str, Any], config: dict[str, Any]) -> str:
+        resolution = BaseResolver().resolve(
+            root,
+            explicit=str(payload["base"]) if payload.get("base") else None,
+            config=config,
+            required=True,
+        )
+        assert resolution is not None
+        return resolution.revision
 
     def _default_depth(self, target: str) -> str:
         return {"staged": "fast", "branch": "standard", "pull_request": "deep"}[target]

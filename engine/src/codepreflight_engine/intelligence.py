@@ -8,6 +8,7 @@ from typing import Any, Literal, TypeVar, cast
 from pydantic import BaseModel, ValidationError
 
 from .adapters import ProviderRegistry
+from .base import BaseResolver
 from .config import load_config
 from .context import ContextBuilder
 from .errors import CodePreflightError
@@ -18,7 +19,6 @@ from .models import (
     ProviderState,
     RepositoryAnswer,
 )
-from .repository import RepositoryInspector
 from .secrets import redact_secrets
 
 StructuredResponse = TypeVar("StructuredResponse", bound=BaseModel)
@@ -55,7 +55,7 @@ class RepositoryIntelligence:
             target: Literal["staged", "branch", "pull_request"] = (
                 "staged" if mode == "diff" else "branch"
             )
-            base = self._base_revision(root, payload) if target == "branch" else None
+            base = self._base_revision(root, payload, config) if target == "branch" else None
             context = ContextBuilder().build(
                 root,
                 config,
@@ -78,7 +78,7 @@ class RepositoryIntelligence:
                     "unsupported_target", "Questions support staged or branch evidence"
                 )
             target = cast(Literal["staged", "branch", "pull_request"], requested_target)
-            base = self._base_revision(root, payload) if target == "branch" else None
+            base = self._base_revision(root, payload, config) if target == "branch" else None
             context = ContextBuilder().build(
                 root,
                 config,
@@ -126,16 +126,15 @@ class RepositoryIntelligence:
             combined += "\n\n## Selected-line blame\n" + blame
         return redact_secrets(combined).content[:100_000]
 
-    def _base_revision(self, root: Path, payload: dict[str, Any]) -> str:
-        base = payload.get("base") or RepositoryInspector().inspect(root).base_branch
-        if not base:
-            raise CodePreflightError("base_branch_required", "Pass --base explicitly")
-        result = GitRunner(root).run("merge-base", "HEAD", str(base), check=False)
-        if result.returncode != 0:
-            result = GitRunner(root).run("merge-base", "HEAD", f"origin/{base}", check=False)
-        if result.returncode != 0 or not result.stdout.strip():
-            raise CodePreflightError("base_branch_invalid", f"Cannot resolve base branch {base}")
-        return result.stdout.strip()
+    def _base_revision(self, root: Path, payload: dict[str, Any], config: dict[str, Any]) -> str:
+        resolution = BaseResolver().resolve(
+            root,
+            explicit=str(payload["base"]) if payload.get("base") else None,
+            config=config,
+            required=True,
+        )
+        assert resolution is not None
+        return resolution.revision
 
     def _explanation_prompt(self, instruction: str, evidence: str) -> str:
         return (
