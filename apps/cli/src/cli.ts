@@ -508,6 +508,8 @@ program
   );
 
 program.action(() => {
-  render(React.createElement(App, { repositoryPath: resolve(process.cwd()) }));
+  render(React.createElement(App, { repositoryPath: resolve(process.cwd()) }), {
+    exitOnCtrlC: false,
+  });
 });
 await program.parseAsync(process.argv);

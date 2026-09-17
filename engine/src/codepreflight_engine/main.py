@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any
@@ -180,16 +182,25 @@ def handle_line(line: str) -> None:
 
 
 def main() -> None:
+    signal.signal(signal.SIGTERM, _terminate)
     emit(
         EngineEvent(
             requestId="",
             event="ready",
-            payload={"engineVersion": "0.1.0", "protocolVersion": PROTOCOL_VERSION},
+            payload={
+                "engineVersion": "0.1.0",
+                "protocolVersion": PROTOCOL_VERSION,
+                "processId": os.getpid(),
+            },
         )
     )
     for line in sys.stdin:
         if line.strip():
             handle_line(line)
+
+
+def _terminate(signum: int, frame: object) -> None:
+    raise SystemExit(128 + signum)
 
 
 if __name__ == "__main__":
