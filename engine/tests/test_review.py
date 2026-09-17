@@ -9,6 +9,7 @@ from codepreflight_engine.adapters.base import ProviderAdapter
 from codepreflight_engine.errors import CodePreflightError
 from codepreflight_engine.models import ProviderDescriptor, ProviderKind, ProviderState
 from codepreflight_engine.review import ReviewOrchestrator
+from codepreflight_engine.trust import trust_repository
 
 
 class FakeAdapter:
@@ -72,15 +73,21 @@ def test_review_parses_and_verifies_findings(
             },
         ),
     )
-    events: list[str] = []
+    events: list[tuple[str, dict[str, object]]] = []
 
     result = ReviewOrchestrator().review_staged(
-        git_repository, {"provider": "ollama"}, lambda event, payload: events.append(event)
+        git_repository,
+        {"provider": "ollama"},
+        lambda event, payload: events.append((event, payload)),
     )
 
     assert result.summary == "One concern."
     assert result.findings[0].verification.value == "verified"
-    assert "finding" in events
+    event_names = [event for event, _ in events]
+    assert "finding" in event_names
+    assert event_names.index("consent_required") < event_names.index("provider_delta")
+    disclosure = next(payload for event, payload in events if event == "consent_required")
+    assert disclosure["manifest"]["total_characters"] > 0  # type: ignore[index]
 
 
 def test_remote_provider_requires_explicit_consent(
@@ -93,6 +100,7 @@ def test_remote_provider_requires_explicit_consent(
         monkeypatch,
         FakeAdapter(descriptor("codex", remote=True), {"summary": "ok", "findings": []}),
     )
+    trust_repository(git_repository)
 
     with pytest.raises(CodePreflightError) as error:
         ReviewOrchestrator().review_staged(
@@ -100,6 +108,27 @@ def test_remote_provider_requires_explicit_consent(
         )
 
     assert error.value.code == "provider_consent_required"
+
+
+def test_authenticated_cli_requires_repository_trust(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    install_adapter(
+        monkeypatch,
+        FakeAdapter(descriptor("codex", remote=True), {"summary": "ok", "findings": []}),
+    )
+
+    with pytest.raises(CodePreflightError) as error:
+        ReviewOrchestrator().review_staged(
+            git_repository,
+            {"provider": "codex", "remoteApproved": True},
+            lambda event, payload: None,
+        )
+
+    assert error.value.code == "repository_not_trusted"
 
 
 def test_review_cache_avoids_repeating_provider_request(

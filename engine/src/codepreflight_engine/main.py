@@ -167,7 +167,10 @@ def handle_line(line: str) -> None:
                 requestId=request_id,
                 event="error",
                 error=EngineFailure(
-                    code=error.code, message=str(error), recoverable=error.recoverable
+                    code=error.code,
+                    message=str(error),
+                    recoverable=error.recoverable,
+                    details=error.details,
                 ),
             )
         )

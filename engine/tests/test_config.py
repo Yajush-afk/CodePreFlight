@@ -31,3 +31,25 @@ def test_repository_values_override_global_values(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
     assert load_config(git_repository)["review"]["depth"] == "fast"
+
+
+def test_config_validation_reports_precise_field(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty-config"))
+    (git_repository / ".codepreflight.toml").write_text(
+        '[review]\npolicy = "sometimes"\n', encoding="utf-8"
+    )
+
+    with pytest.raises(CodePreflightError) as error:
+        load_config(git_repository)
+
+    assert error.value.code == "invalid_config"
+    assert error.value.details == {
+        "fields": [
+            {
+                "field": "review.policy",
+                "message": "Input should be 'informational', 'warning' or 'block'",
+            }
+        ]
+    }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,15 @@ def initialize_repository(root: Path, *, write: bool, trust: bool = False) -> di
         }
     config = propose_configuration(root)
     rendered = tomli_w.dumps(config)
+    current = path.read_text(encoding="utf-8") if path.exists() else ""
+    proposed_diff = "".join(
+        unified_diff(
+            current.splitlines(keepends=True),
+            rendered.splitlines(keepends=True),
+            fromfile=str(path) if current else "/dev/null",
+            tofile=str(path),
+        )
+    )
     if write:
         if path.exists():
             raise CodePreflightError(
@@ -101,4 +111,5 @@ def initialize_repository(root: Path, *, write: bool, trust: bool = False) -> di
         "trusted": write,
         "configuration": config,
         "preview": rendered,
+        "diff": proposed_diff,
     }

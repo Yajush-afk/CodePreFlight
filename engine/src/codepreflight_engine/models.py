@@ -125,6 +125,7 @@ class CheckDefinition(StrictModel):
     name: str
     command: list[str] = Field(min_length=1)
     timeout_seconds: int = Field(default=120, ge=1, le=1800)
+    run: bool = True
 
 
 class CheckStatus(StrEnum):
@@ -132,6 +133,7 @@ class CheckStatus(StrEnum):
     FAILED = "failed"
     SKIPPED = "skipped"
     TIMED_OUT = "timed_out"
+    RECOMMENDED = "recommended"
 
 
 class CheckResult(StrictModel):
@@ -155,6 +157,7 @@ class ContextManifest(StrictModel):
     total_characters: int
     limit_characters: int
     redactions: int
+    secret_scanner: str = "built-in"
 
 
 class ContextPackage(StrictModel):
