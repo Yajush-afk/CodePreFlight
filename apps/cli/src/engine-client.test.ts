@@ -1,9 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { EngineClient } from "./engine-client.js";
+import { EngineClient, EngineRequestError } from "./engine-client.js";
 
 const repository = mkdtempSync(join(tmpdir(), "codepreflight-protocol-"));
 
@@ -35,5 +41,86 @@ describe("EngineClient process protocol", () => {
 
     expect(events[0]).toBe("ready");
     expect((result.repository as { branch: string }).branch).toBe("main");
+  });
+
+  it("reuses one engine process for an interactive session", async () => {
+    const client = new EngineClient({ persistent: true });
+    const processIds: number[] = [];
+    const captureReady = (event: {
+      event: string;
+      payload?: Record<string, unknown>;
+    }): void => {
+      if (event.event === "ready")
+        processIds.push(Number(event.payload?.processId));
+    };
+
+    await client.status(repository, captureReady);
+    await client.request("doctor", repository, {}, captureReady);
+    client.dispose();
+
+    expect(processIds).toHaveLength(2);
+    expect(processIds[0]).toBe(processIds[1]);
+  });
+
+  it("cancels an active process group and allows temporary cleanup", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "codepreflight-cancel-"));
+    const marker = join(fixture, "provider.tmp");
+    const engine = join(fixture, "fake-engine.mjs");
+    writeFileSync(
+      engine,
+      `#!/usr/bin/env node
+import { rmSync, writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(marker)}, "active");
+process.stdout.write(JSON.stringify({protocolVersion:1,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.on("SIGTERM", () => { rmSync(${JSON.stringify(marker)}, {force:true}); process.exit(0); });
+process.stdin.resume();
+`,
+    );
+    chmodSync(engine, 0o755);
+    const controller = new AbortController();
+    const client = new EngineClient({
+      persistent: true,
+      engineCommand: [engine],
+    });
+    const pending = client.request("status", repository, {}, undefined, {
+      signal: controller.signal,
+    });
+
+    await new Promise((resolveWait) => setTimeout(resolveWait, 30));
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject<Partial<EngineRequestError>>({
+      code: "engine_cancelled",
+    });
+    for (let attempt = 0; attempt < 20 && existsSync(marker); attempt += 1) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+    expect(existsSync(marker)).toBe(false);
+    rmSync(fixture, { recursive: true, force: true });
+  });
+
+  it("reports malformed engine output clearly", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "codepreflight-malformed-"));
+    const engine = join(fixture, "malformed-engine.mjs");
+    writeFileSync(
+      engine,
+      '#!/usr/bin/env node\nprocess.stdout.write("not-json\\n");\n',
+    );
+    chmodSync(engine, 0o755);
+
+    await expect(
+      new EngineClient({ engineCommand: [engine] }).status(repository),
+    ).rejects.toThrow("Engine emitted invalid JSON");
+    rmSync(fixture, { recursive: true, force: true });
+  });
+
+  it("reports a missing engine launcher clearly", async () => {
+    await expect(
+      new EngineClient({
+        engineCommand: [join(repository, "missing-engine")],
+      }).status(repository),
+    ).rejects.toMatchObject<Partial<EngineRequestError>>({
+      code: "engine_launcher_missing",
+    });
   });
 });

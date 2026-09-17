@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { EngineClient } from "./engine-client.js";
 
@@ -39,22 +39,39 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
   const [review, setReview] = useState<ReviewView | null>(null);
+  const [client] = useState(() => new EngineClient({ persistent: true }));
+  const activeRequest = useRef<AbortController | null>(null);
+
+  const controller = (): AbortController => {
+    activeRequest.current?.abort();
+    const next = new AbortController();
+    activeRequest.current = next;
+    return next;
+  };
 
   const refresh = (): void => {
     setError(null);
-    new EngineClient()
-      .status(repositoryPath)
-      .then((result) => setSnapshot(result.repository as SnapshotView))
-      .catch((reason: unknown) =>
-        setError(reason instanceof Error ? reason.message : String(reason)),
-      );
+    const request = controller();
+    client
+      .status(repositoryPath, undefined, { signal: request.signal })
+      .then((result) => {
+        if (activeRequest.current === request) {
+          setSnapshot(result.repository as SnapshotView);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (activeRequest.current === request && !request.signal.aborted) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      });
   };
 
   const runReview = (): void => {
     setError(null);
     setReview(null);
     setActivity("Preparing staged review…");
-    new EngineClient()
+    const request = controller();
+    client
       .request(
         "review",
         repositoryPath,
@@ -64,20 +81,35 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
             setActivity(String(event.payload?.message ?? "Reviewing…"));
           }
         },
+        { signal: request.signal },
       )
       .then((result) => {
-        setReview(result as ReviewView);
-        setActivity(null);
+        if (activeRequest.current === request) {
+          setReview(result as ReviewView);
+          setActivity(null);
+        }
       })
       .catch((reason: unknown) => {
-        setActivity(null);
-        setError(reason instanceof Error ? reason.message : String(reason));
+        if (activeRequest.current === request && !request.signal.aborted) {
+          setActivity(null);
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
       });
   };
 
-  useEffect(refresh, [repositoryPath]);
-  useInput((input) => {
-    if (input === "q") exit();
+  useEffect(() => {
+    refresh();
+    return () => {
+      activeRequest.current?.abort();
+      client.dispose();
+    };
+  }, [repositoryPath]);
+  useInput((input, key) => {
+    if (input === "q" || (key.ctrl && input === "c")) {
+      activeRequest.current?.abort();
+      client.dispose();
+      exit();
+    }
     if (input === "s") refresh();
     if (input === "r") runReview();
   });
