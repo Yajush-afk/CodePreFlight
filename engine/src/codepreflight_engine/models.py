@@ -44,6 +44,7 @@ class ChangeKind(StrEnum):
     UNMERGED = "unmerged"
     UNTRACKED = "untracked"
     TYPE_CHANGED = "type_changed"
+    IGNORED = "ignored"
     UNKNOWN = "unknown"
 
 
@@ -53,6 +54,7 @@ class FileChange(StrictModel):
     staged: bool = False
     unstaged: bool = False
     untracked: bool = False
+    ignored: bool = False
     previous_path: str | None = None
 
 
@@ -60,6 +62,13 @@ class Remote(StrictModel):
     name: str
     fetch_url: str | None = None
     push_url: str | None = None
+
+
+class GitHubRepository(StrictModel):
+    host: str
+    owner: str
+    name: str
+    url: str
 
 
 class ProjectContext(StrictModel):
@@ -76,10 +85,12 @@ class RepositorySnapshot(StrictModel):
     branch: str | None
     detached_head: str | None
     base_branch: str | None
+    merge_base: str | None
     upstream: str | None
     ahead: int
     behind: int
     remotes: list[Remote]
+    github: GitHubRepository | None = None
     files: list[FileChange]
     conflicts: list[str]
     project: ProjectContext

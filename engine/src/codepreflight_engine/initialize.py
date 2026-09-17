@@ -6,6 +6,7 @@ from typing import Any
 
 import tomli_w
 
+from .base import BaseResolver
 from .config import load_config, repository_config_path
 from .errors import CodePreflightError
 from .trust import trust_repository
@@ -44,7 +45,8 @@ def propose_configuration(root: Path) -> dict[str, Any]:
                 },
             ]
         )
-    return {
+    base = BaseResolver().resolve(root, required=False)
+    config: dict[str, Any] = {
         "version": 1,
         "review": {"provider": "ollama", "context_limit": 60000, "policy": "warning"},
         "checks": checks,
@@ -60,6 +62,9 @@ def propose_configuration(root: Path) -> dict[str, Any]:
         "hooks": {"remote_provider_approved": False, "fail_closed": False},
         "cache": {"enabled": True},
     }
+    if base:
+        config["git"] = {"base_branch": base.branch}
+    return config
 
 
 def initialize_repository(root: Path, *, write: bool, trust: bool = False) -> dict[str, Any]:

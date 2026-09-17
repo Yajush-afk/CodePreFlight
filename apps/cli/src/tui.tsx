@@ -17,6 +17,7 @@ interface SnapshotView {
     staged: boolean;
     unstaged: boolean;
     untracked: boolean;
+    ignored?: boolean;
   }>;
   conflicts?: string[];
   project?: { attention_areas?: string[] };
@@ -129,6 +130,7 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
   const staged = files.filter((file) => file.staged).length;
   const unstaged = files.filter((file) => file.unstaged).length;
   const untracked = files.filter((file) => file.untracked).length;
+  const ignored = files.filter((file) => file.ignored).length;
 
   return (
     <Box flexDirection="column" padding={1}>
@@ -154,6 +156,7 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
         <Text color="green">{staged} staged</Text>
         <Text color="yellow">{unstaged} unstaged</Text>
         <Text color="magenta">{untracked} untracked</Text>
+        <Text dimColor>{ignored} ignored</Text>
         <Text color={snapshot.conflicts?.length ? "red" : undefined}>
           {snapshot.conflicts?.length ?? 0} conflicts
         </Text>

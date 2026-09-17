@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlparse
 
+from .base import BaseResolver
+from .config import load_config
 from .git import GitRunner
 from .models import (
     ChangeKind,
     FileChange,
+    GitHubRepository,
     ProjectContext,
     Remote,
     RepositorySnapshot,
@@ -68,29 +73,42 @@ class RepositoryInspector:
         branch_result = git.run("symbolic-ref", "--quiet", "--short", "HEAD", check=False)
         branch = branch_result.stdout.strip() or None
         detached = None if branch else self._optional(git, "rev-parse", "--short", "HEAD")
-        upstream = self._optional(git, "rev-parse", "--abbrev-ref", "@{upstream}")
+        config = load_config(root)
+        with ThreadPoolExecutor(max_workers=6, thread_name_prefix="preflight-git") as executor:
+            upstream_future = executor.submit(
+                self._optional, git, "rev-parse", "--abbrev-ref", "@{upstream}"
+            )
+            files_future = executor.submit(self._changes, git)
+            conflicts_future = executor.submit(self._conflicts, git)
+            remotes_future = executor.submit(self._remotes, git)
+            tracked_future = executor.submit(
+                lambda: git.run("ls-files", "-z", check=False).stdout.split("\0")
+            )
+            base_future = executor.submit(
+                BaseResolver().resolve, root, config=config, required=False
+            )
+            upstream = upstream_future.result()
+            files = files_future.result()
+            conflicts = conflicts_future.result()
+            remotes = remotes_future.result()
+            tracked = [path for path in tracked_future.result() if path]
+            base = base_future.result()
         ahead, behind = self._ahead_behind(git, upstream)
-        files = self._changes(git)
-        conflicts = sorted(
-            path
-            for path in git.run(
-                "diff", "--name-only", "--diff-filter=U", check=False
-            ).stdout.splitlines()
-            if path
-        )
 
         return RepositorySnapshot(
             root=str(root),
             branch=branch,
             detached_head=detached,
-            base_branch=self._base_branch(git, branch),
+            base_branch=base.branch if base else None,
+            merge_base=base.revision if base else None,
             upstream=upstream,
             ahead=ahead,
             behind=behind,
-            remotes=self._remotes(git),
+            remotes=remotes,
+            github=self._github(remotes),
             files=files,
             conflicts=conflicts,
-            project=self._project_context(root, files),
+            project=self._project_context(tracked, files),
         )
 
     def _optional(self, git: GitRunner, *args: str) -> str | None:
@@ -106,21 +124,6 @@ class RepositoryInspector:
         values = result.stdout.split()
         return (int(values[0]), int(values[1])) if len(values) == 2 else (0, 0)
 
-    def _base_branch(self, git: GitRunner, branch: str | None) -> str | None:
-        remote_head = self._optional(git, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-        if remote_head:
-            return remote_head.removeprefix("origin/")
-        for candidate in ("main", "master"):
-            if (
-                candidate != branch
-                and git.run(
-                    "show-ref", "--verify", f"refs/heads/{candidate}", check=False
-                ).returncode
-                == 0
-            ):
-                return candidate
-        return None
-
     def _changes(self, git: GitRunner) -> list[FileChange]:
         changes: dict[str, FileChange] = {}
         self._merge_name_status(
@@ -132,7 +135,29 @@ class RepositoryInspector:
         untracked = git.run("ls-files", "--others", "--exclude-standard", "-z").stdout
         for path in filter(None, untracked.split("\0")):
             changes[path] = FileChange(path=path, kind=ChangeKind.UNTRACKED, untracked=True)
+        ignored = git.run(
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ).stdout
+        for path in list(filter(None, ignored.split("\0")))[:1000]:
+            changes.setdefault(
+                path,
+                FileChange(path=path, kind=ChangeKind.IGNORED, ignored=True),
+            )
         return sorted(changes.values(), key=lambda item: item.path)
+
+    def _conflicts(self, git: GitRunner) -> list[str]:
+        return sorted(
+            path
+            for path in git.run(
+                "diff", "--name-only", "--diff-filter=U", check=False
+            ).stdout.splitlines()
+            if path
+        )
 
     def _merge_name_status(
         self, changes: dict[str, FileChange], output: str, *, staged: bool
@@ -175,9 +200,31 @@ class RepositoryInspector:
             values.setdefault(name, {})["fetch_url" if "fetch" in operation else "push_url"] = url
         return [Remote(name=name, **urls) for name, urls in sorted(values.items())]
 
-    def _project_context(self, root: Path, files: list[FileChange]) -> ProjectContext:
-        tracked = GitRunner(root).run("ls-files", "-z", check=False).stdout.split("\0")
-        paths = [path for path in tracked if path]
+    def _github(self, remotes: list[Remote]) -> GitHubRepository | None:
+        ordered = sorted(remotes, key=lambda remote: remote.name != "origin")
+        for remote in ordered:
+            value = remote.fetch_url or remote.push_url
+            if not value:
+                continue
+            if value.startswith("git@") and ":" in value:
+                host, path = value[4:].split(":", 1)
+            else:
+                parsed = urlparse(value)
+                host, path = parsed.hostname or "", parsed.path.lstrip("/")
+            if "github" not in host.lower():
+                continue
+            parts = path.removesuffix(".git").strip("/").split("/")
+            if len(parts) != 2 or not all(parts):
+                continue
+            return GitHubRepository(
+                host=host,
+                owner=parts[0],
+                name=parts[1],
+                url=f"https://{host}/{parts[0]}/{parts[1]}",
+            )
+        return None
+
+    def _project_context(self, paths: list[str], files: list[FileChange]) -> ProjectContext:
         languages = Counter(
             language
             for path in paths
