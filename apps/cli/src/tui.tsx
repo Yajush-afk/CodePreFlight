@@ -34,12 +34,21 @@ interface ReviewView {
   rejected_findings?: number;
 }
 
+interface DisclosureView {
+  provider: string;
+  kind: string;
+  characters: number;
+  redactions: number;
+  scanner: string;
+}
+
 export function App({ repositoryPath }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const [snapshot, setSnapshot] = useState<SnapshotView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
   const [review, setReview] = useState<ReviewView | null>(null);
+  const [disclosure, setDisclosure] = useState<DisclosureView | null>(null);
   const [client] = useState(() => new EngineClient({ persistent: true }));
   const activeRequest = useRef<AbortController | null>(null);
 
@@ -70,6 +79,7 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
   const runReview = (): void => {
     setError(null);
     setReview(null);
+    setDisclosure(null);
     setActivity("Preparing staged review…");
     const request = controller();
     client
@@ -80,6 +90,24 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
         (event) => {
           if (event.event === "progress") {
             setActivity(String(event.payload?.message ?? "Reviewing…"));
+          }
+          if (event.event === "consent_required") {
+            const provider = event.payload?.provider as
+              { name?: string; kind?: string } | undefined;
+            const manifest = event.payload?.manifest as
+              | {
+                  total_characters?: number;
+                  redactions?: number;
+                  secret_scanner?: string;
+                }
+              | undefined;
+            setDisclosure({
+              provider: provider?.name ?? "unknown",
+              kind: provider?.kind ?? "unknown",
+              characters: manifest?.total_characters ?? 0,
+              redactions: manifest?.redactions ?? 0,
+              scanner: manifest?.secret_scanner ?? "built-in",
+            });
           }
         },
         { signal: request.signal },
@@ -120,6 +148,13 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
       <Box flexDirection="column" padding={1}>
         <Text color="red">CodePreFlight could not complete the request</Text>
         <Text>{error}</Text>
+        {disclosure && (
+          <Text>
+            Disclosure: {disclosure.provider} · {disclosure.kind} ·{" "}
+            {disclosure.characters} characters · {disclosure.redactions}{" "}
+            redactions · {disclosure.scanner}
+          </Text>
+        )}
         <Text dimColor>Press s to retry status · q to exit</Text>
       </Box>
     );
@@ -170,6 +205,16 @@ export function App({ repositoryPath }: AppProps): React.JSX.Element {
       {activity && (
         <Box marginTop={1}>
           <Text color="cyan">{activity}</Text>
+        </Box>
+      )}
+      {disclosure && (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Provider disclosure</Text>
+          <Text>
+            {disclosure.provider} · {disclosure.kind} · {disclosure.characters}{" "}
+            characters · {disclosure.redactions} redactions ·{" "}
+            {disclosure.scanner}
+          </Text>
         </Box>
       )}
       {review && (

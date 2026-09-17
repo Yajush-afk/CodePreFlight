@@ -16,10 +16,12 @@ from .git import GitRunner
 from .models import (
     ExplanationEvidence,
     ExplanationResponse,
+    ProviderKind,
     ProviderState,
     RepositoryAnswer,
 )
 from .secrets import redact_secrets
+from .trust import is_trusted
 
 StructuredResponse = TypeVar("StructuredResponse", bound=BaseModel)
 
@@ -36,6 +38,12 @@ class RepositoryIntelligence:
             raise CodePreflightError(
                 "provider_unavailable",
                 f"Provider {adapter.descriptor.name} is {adapter.descriptor.state.value}",
+            )
+        if adapter.descriptor.kind == ProviderKind.SUBSCRIPTION_CLI and not is_trusted(root):
+            raise CodePreflightError(
+                "repository_not_trusted",
+                "Trust the repository configuration before invoking an authenticated CLI provider",
+                recoverable=True,
             )
         if adapter.descriptor.sends_code_remotely and not bool(payload.get("remoteApproved")):
             raise CodePreflightError(

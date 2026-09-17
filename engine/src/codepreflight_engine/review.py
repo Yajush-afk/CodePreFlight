@@ -17,6 +17,7 @@ from .finding_schema import parse_provider_response, provider_output_schema
 from .models import (
     BlastRadiusItem,
     Finding,
+    ProviderKind,
     ProviderState,
     ReviewResult,
     Severity,
@@ -71,6 +72,13 @@ class ReviewOrchestrator:
             raise CodePreflightError(
                 "provider_unavailable", f"Provider {provider.name} is {provider.state.value}"
             )
+        if provider.kind == ProviderKind.SUBSCRIPTION_CLI and not is_trusted(root):
+            raise CodePreflightError(
+                "repository_not_trusted",
+                "Review the repository configuration and run `preflight init --trust` before "
+                f"invoking {provider.name}",
+                recoverable=True,
+            )
         blast_radius = BlastRadiusAnalyzer().analyze(root, context.changed_files)
         depth = str(payload.get("depth") or self._default_depth(target))
         fingerprint = self._fingerprint(
@@ -94,6 +102,11 @@ class ReviewOrchestrator:
                 "provider": provider.model_dump(mode="json"),
                 "contextCharacters": context.manifest.total_characters,
                 "redactions": context.manifest.redactions,
+                "manifest": context.manifest.model_dump(mode="json"),
+                "destination": {
+                    "kind": provider.kind.value,
+                    "remote": provider.sends_code_remotely,
+                },
             },
         )
         hook_approval = bool(payload.get("hook")) and bool(

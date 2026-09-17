@@ -11,10 +11,30 @@ import {
   printReview,
   printValue,
 } from "./format.js";
+import type { EngineEvent } from "./protocol.js";
 import { App } from "./tui.js";
 
 const program = new Command();
 const client = new EngineClient();
+
+function printProviderDisclosure(event: EngineEvent): void {
+  if (event.event !== "consent_required") return;
+  const provider = event.payload?.provider as
+    { name?: string; kind?: string } | undefined;
+  const manifest = event.payload?.manifest as
+    | {
+        total_characters?: number;
+        redactions?: number;
+        secret_scanner?: string;
+      }
+    | undefined;
+  process.stderr.write(
+    `Provider disclosure: ${provider?.name ?? "unknown"} (${provider?.kind ?? "unknown"}); ` +
+      `${manifest?.total_characters ?? event.payload?.contextCharacters ?? 0} context characters; ` +
+      `${manifest?.redactions ?? event.payload?.redactions ?? 0} redactions; ` +
+      `scanner ${manifest?.secret_scanner ?? "built-in"}.\n`,
+  );
+}
 
 program
   .name("preflight")
@@ -120,6 +140,7 @@ program
             hook: Boolean(options.hook),
           },
           (event) => {
+            printProviderDisclosure(event);
             if (!options.json && event.event === "progress") {
               process.stderr.write(
                 `${String(event.payload?.message ?? "Working")}\n`,
@@ -213,6 +234,7 @@ pr.command("prepare")
             provider: options.provider,
             remoteApproved: Boolean(options.approve),
           },
+          printProviderDisclosure,
         );
         if (options.json) printValue(result, true);
         else {
@@ -403,6 +425,7 @@ program
             base: options.base,
             remoteApproved: Boolean(options.approve),
           },
+          printProviderDisclosure,
         );
         if (options.json) printValue(result, true);
         else printPanel(result);
@@ -445,6 +468,7 @@ program
             provider: options.provider,
             remoteApproved: Boolean(options.approve),
           },
+          printProviderDisclosure,
         );
         const review = preparation.review as { blocking?: boolean };
         if (review.blocking && !options.bypassReviewPolicy) {

@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from codepreflight_engine.checks import CheckRunner
@@ -16,3 +17,28 @@ def test_reports_passed_and_failed_checks(tmp_path: Path) -> None:
     assert results[0].output.strip() == "ok"
     assert results[1].status == CheckStatus.FAILED
     assert results[1].exit_code == 3
+
+
+def test_runs_checks_concurrently_and_keeps_recommendations_distinct(tmp_path: Path) -> None:
+    definitions = [
+        CheckDefinition(
+            name="slow-one",
+            command=["python", "-c", "import time; time.sleep(0.2)"],
+        ),
+        CheckDefinition(
+            name="slow-two",
+            command=["python", "-c", "import time; time.sleep(0.2)"],
+        ),
+        CheckDefinition(name="manual", command=["python", "-V"], run=False),
+    ]
+
+    started = time.monotonic()
+    results = CheckRunner().run(tmp_path, definitions, concurrency=2)
+    duration = time.monotonic() - started
+
+    assert duration < 0.38
+    assert [result.status for result in results] == [
+        CheckStatus.PASSED,
+        CheckStatus.PASSED,
+        CheckStatus.RECOMMENDED,
+    ]
