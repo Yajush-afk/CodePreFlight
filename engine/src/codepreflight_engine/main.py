@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +18,10 @@ from .errors import CodePreflightError
 from .hooks import HookManager
 from .initialize import initialize_repository
 from .intelligence import RepositoryIntelligence
+from .local_log import log_operation
 from .models import EngineEvent, EngineFailure, EngineRequest
 from .panel import PanelReviewer
-from .protocol_generated import PROTOCOL_VERSION
+from .protocol_generated import ENGINE_COMMANDS, PROTOCOL_VERSION
 from .providers import discover_providers
 from .pull_request import prepare_pull_request
 from .repository import RepositoryInspector
@@ -146,13 +148,26 @@ def dispatch(request: EngineRequest) -> None:
 
 
 def handle_line(line: str) -> None:
+    started = time.monotonic()
     request_id = ""
+    command = "invalid"
+    repository_path = ""
     try:
         raw = json.loads(line)
         if isinstance(raw, dict):
             request_id = str(raw.get("requestId", ""))
+            raw_command = str(raw.get("command", "invalid"))
+            command = raw_command if raw_command in ENGINE_COMMANDS else "invalid"
+            repository_path = str(raw.get("repositoryPath", ""))
         request = EngineRequest.model_validate(raw)
         dispatch(request)
+        log_operation(
+            event="complete",
+            command=command,
+            request_id=request_id,
+            repository_path=repository_path,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
     except ValidationError as error:
         emit(
             EngineEvent(
@@ -160,6 +175,14 @@ def handle_line(line: str) -> None:
                 event="error",
                 error=EngineFailure(code="invalid_request", message=str(error), recoverable=False),
             )
+        )
+        log_operation(
+            event="error",
+            command=command,
+            request_id=request_id,
+            repository_path=repository_path,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_code="invalid_request",
         )
     except CodePreflightError as error:
         emit(
@@ -174,6 +197,14 @@ def handle_line(line: str) -> None:
                 ),
             )
         )
+        log_operation(
+            event="error",
+            command=command,
+            request_id=request_id,
+            repository_path=repository_path,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_code=error.code,
+        )
     except Exception as error:  # defensive process boundary
         emit(
             EngineEvent(
@@ -181,6 +212,14 @@ def handle_line(line: str) -> None:
                 event="error",
                 error=EngineFailure(code="internal_error", message=str(error), recoverable=False),
             )
+        )
+        log_operation(
+            event="error",
+            command=command,
+            request_id=request_id,
+            repository_path=repository_path,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_code="internal_error",
         )
 
 

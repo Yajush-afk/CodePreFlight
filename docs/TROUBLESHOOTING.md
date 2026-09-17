@@ -11,9 +11,16 @@ Start with `preflight doctor` and `preflight providers`.
   `preflight init --trust` to refresh local trust state.
 - `base_branch_required` or `base_branch_invalid`: pass `--base <branch>` explicitly.
 - `provider_output_invalid`: the provider did not return schema-valid JSON. Retry with a
-  compatible model or inspect the provider's own authentication and version.
+  compatible model or inspect the provider's own authentication and version. Reviews make
+  one constrained repair attempt; a second malformed response is preserved locally as a
+  failed, non-blocking review.
 - stale-looking output: run with `--no-cache` or use `preflight cache clear`.
 
 Hooks deliberately fail open on engine failures by default. Run the corresponding review
 command manually to see the complete error. Use `preflight hooks status <hook>` before
 reinstalling or removing a managed block.
+
+Operational metadata is available in
+`${XDG_STATE_HOME:-$HOME/.local/state}/codepreflight/events.jsonl`. It intentionally omits
+repository paths, content, prompts, responses, payloads, and credentials. Removing this file
+is safe; it will be recreated when the next command runs.

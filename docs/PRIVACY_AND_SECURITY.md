@@ -27,7 +27,52 @@ Secret scanning is defense in depth, not a guarantee that every credential forma
 recognized. Review the Context Manifest and provider destination before approval.
 
 Git reads are automatic. Commits require an unchanged staged fingerprint, an approved
-message, and explicit final confirmation. Managed hooks preserve existing content inside
-a removable marked block and fail open on operational failures unless the repository opts
-into fail-closed behavior. CodePreFlight does not push, reset, rebase, merge, switch
+message, and explicit final confirmation. CodePreFlight never modifies an unmanaged hook;
+it returns a manual integration snippet when one already exists. Hooks created or already
+managed by CodePreFlight use a removable marked block and fail open on operational failures
+unless the repository opts into fail-closed behavior. CodePreFlight does not push, reset, rebase, merge, switch
 branches, delete branches, or force-push.
+
+## Local operational logs
+
+CodePreFlight writes bounded JSON Lines operational logs to
+`${XDG_STATE_HOME:-$HOME/.local/state}/codepreflight/events.jsonl`. A record contains a
+timestamp, command name, hashed request identifier, duration, outcome, error code when applicable,
+and a one-way truncated hash of the repository path. It never contains prompts, provider
+responses, diffs, file contents, configuration values, command payloads, credentials, or
+the repository path itself. The file is created with user-only permissions and rotated
+locally. These logs are never transmitted; CodePreFlight has no analytics or telemetry.
+
+## Threat model
+
+Assets include repository source, Git state, credentials, provider authentication, and the
+integrity of commits and hooks. Trust boundaries are the local repository, approved
+repository commands, the TypeScript-Python protocol, local CLI providers, and remote API
+providers.
+
+Primary threats and mitigations:
+
+- Prompt injection in source or diffs: repository content is labeled untrusted, context is
+  bounded, adapters do not receive repository mutation permission, and findings are checked
+  against local evidence.
+- Credential disclosure: obvious secrets are scanned before provider invocation, supported
+  values are redacted, unsafe content stops review, repository config rejects secret-like
+  fields, and every remote destination requires disclosure and approval.
+- Malicious repository configuration: executable checks require repository trust; changing
+  the configuration digest or remote identity revokes that trust.
+- Destructive Git behavior: inspection is read-only; commits require explicit confirmation
+  and an unchanged staged fingerprint; push, reset, merge, rebase, checkout, branch deletion,
+  and force-push are not implemented.
+- Hook takeover: unmanaged hooks are never overwritten. Managed blocks can be previewed,
+  disabled, removed, and bypassed through standard Git behavior.
+- Hallucinated AI findings: structured output is validated, malformed responses receive only
+  one constrained repair attempt, evidence is locally verified, rejected claims are hidden,
+  and only verified configured severities may block.
+- Local-state leakage: caches omit raw context and credentials; operational logs use only
+  allow-listed metadata and a repository-path hash.
+
+Residual risks remain. Pattern-based scanning cannot recognize every secret. Provider and
+model retention policies are outside CodePreFlight's control. Read-only CLI sandboxing
+depends on the installed provider honoring its documented controls. Static relationship
+analysis is strongest for supported Python and JavaScript/TypeScript patterns and labels
+text-search fallback as inferred.

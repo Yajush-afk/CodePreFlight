@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    name: Source install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,3 +34,5 @@ jobs:
       - run: make check
       - run: make test
       - run: npm run build
+      - run: npm link --workspace @codepreflight/cli
+      - run: preflight doctor --json
