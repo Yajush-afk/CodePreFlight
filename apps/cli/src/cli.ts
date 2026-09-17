@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import React from "react";
 import { render } from "ink";
 import { EngineClient } from "./engine-client.js";
-import { printValue } from "./format.js";
+import { printReview, printValue } from "./format.js";
 import { App } from "./tui.js";
 
 const program = new Command();
@@ -87,6 +88,81 @@ program
             }
           },
         );
+        if (options.json) printValue(result, true);
+        else printReview(result);
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 2;
+      }
+    },
+  );
+
+program
+  .command("commit")
+  .description("review staged changes, approve a message, and create a commit")
+  .option("--provider <provider>", "override the configured provider")
+  .option("--approve", "approve sending the context package to a remote provider")
+  .option("--message <message>", "replace the proposed commit message")
+  .option("--yes", "approve the final commit non-interactively")
+  .option("--bypass-review-policy", "allow a commit despite blocking findings")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (options: {
+      provider?: string;
+      approve?: boolean;
+      message?: string;
+      yes?: boolean;
+      bypassReviewPolicy?: boolean;
+      json?: boolean;
+    }) => {
+      try {
+        const preparation = await client.request("commit", resolve(process.cwd()), {
+          action: "prepare",
+          provider: options.provider,
+          remoteApproved: Boolean(options.approve),
+        });
+        const review = preparation.review as { blocking?: boolean };
+        if (review.blocking && !options.bypassReviewPolicy) {
+          if (options.json) printValue(preparation, true);
+          else printReview(preparation.review);
+          process.stderr.write(
+            "Verified findings block this commit; inspect them or pass --bypass-review-policy explicitly.\n",
+          );
+          process.exitCode = 1;
+          return;
+        }
+
+        let message = options.message ?? String(preparation.message ?? "");
+        let approved = Boolean(options.yes);
+        if (!approved) {
+          if (!process.stdin.isTTY || !process.stdout.isTTY) {
+            if (options.json) printValue(preparation, true);
+            else {
+              printReview(preparation.review);
+              process.stdout.write(`Proposed commit: ${String(preparation.message)}\n`);
+            }
+            process.stderr.write("Interactive approval requires a terminal; use --message and --yes.\n");
+            process.exitCode = 3;
+            return;
+          }
+          const prompt = createInterface({ input: process.stdin, output: process.stdout });
+          const edited = await prompt.question(`Commit message [${message}]: `);
+          if (edited.trim()) message = edited.trim();
+          const confirmation = await prompt.question(`Create commit with \"${message}\"? [y/N] `);
+          prompt.close();
+          approved = confirmation.trim().toLowerCase() === "y";
+        }
+        if (!approved) {
+          process.stderr.write("Commit cancelled.\n");
+          process.exitCode = 3;
+          return;
+        }
+        const result = await client.request("commit", resolve(process.cwd()), {
+          action: "execute",
+          approved: true,
+          message,
+          fingerprint: preparation.fingerprint,
+        });
         printValue(result, Boolean(options.json));
       } catch (error) {
         process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

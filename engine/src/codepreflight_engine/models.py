@@ -15,7 +15,7 @@ class StrictModel(BaseModel):
 class EngineRequest(StrictModel):
     protocolVersion: Literal[1]
     requestId: str = Field(min_length=1)
-    command: Literal["doctor", "init", "providers", "review", "status"]
+    command: Literal["commit", "doctor", "init", "providers", "review", "status"]
     repositoryPath: str = Field(min_length=1)
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -164,4 +164,69 @@ class ContextPackage(StrictModel):
 class ReviewPreparation(StrictModel):
     provider: ProviderDescriptor
     context: ContextPackage
-    analysis: str
+    analysis: str = ""
+
+
+class Severity(StrEnum):
+    CRITICAL = "critical"
+    WARNING = "warning"
+    SUGGESTION = "suggestion"
+    INFORMATIONAL = "informational"
+
+
+class Confidence(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class VerificationState(StrEnum):
+    VERIFIED = "verified"
+    PARTIALLY_VERIFIED = "partially_verified"
+    UNVERIFIED = "unverified"
+    REJECTED = "rejected"
+
+
+class EvidenceLocation(StrictModel):
+    path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    symbol: str | None = None
+
+
+class FindingDraft(StrictModel):
+    severity: Severity
+    title: str = Field(min_length=1, max_length=160)
+    explanation: str = Field(min_length=1)
+    impact: str = Field(min_length=1)
+    confidence: Confidence
+    evidence: list[EvidenceLocation] = Field(min_length=1)
+    recommendation: str = Field(min_length=1)
+    suggested_tests: list[str] = Field(default_factory=list)
+
+
+class Finding(FindingDraft):
+    id: str
+    verification: VerificationState
+    verification_notes: list[str] = Field(default_factory=list)
+
+
+class ProviderReviewResponse(StrictModel):
+    summary: str = Field(min_length=1)
+    findings: list[FindingDraft] = Field(default_factory=list)
+
+
+class ReviewResult(StrictModel):
+    provider: ProviderDescriptor
+    summary: str
+    findings: list[Finding]
+    rejected_findings: int
+    context: ContextPackage
+    blocking: bool
+    fingerprint: str
+
+
+class CommitPreparation(StrictModel):
+    message: str
+    fingerprint: str
+    review: ReviewResult
