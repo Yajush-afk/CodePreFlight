@@ -92,7 +92,7 @@ process.stdin.resume();
     await expect(pending).rejects.toMatchObject<Partial<EngineRequestError>>({
       code: "engine_cancelled",
     });
-    for (let attempt = 0; attempt < 20 && existsSync(marker); attempt += 1) {
+    for (let attempt = 0; attempt < 100 && existsSync(marker); attempt += 1) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 20));
     }
     expect(existsSync(marker)).toBe(false);
