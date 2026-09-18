@@ -47,11 +47,13 @@ class ContextBuilder:
         root: Path,
         config: dict[str, Any],
         *,
-        target: Literal["staged", "branch", "pull_request"] = "staged",
+        target: Literal["staged", "commit", "branch", "pull_request"] = "staged",
         base_revision: str | None = None,
+        revision: str | None = None,
+        comparison_note: str | None = None,
     ) -> ContextPackage:
         git = GitRunner(root)
-        diff_args = self._diff_args(target, base_revision)
+        diff_args = self._diff_args(target, base_revision, revision)
         changed_files = [
             path for path in git.run(*diff_args, "--name-only", "-z").stdout.split("\0") if path
         ]
@@ -75,12 +77,12 @@ class ContextBuilder:
         selected: dict[str, str] = {}
         review_files: list[str] = []
         for relative in changed_files:
-            exclusion = self._exclusion(git, target, relative, matcher)
+            exclusion = self._exclusion(git, target, relative, matcher, revision)
             if exclusion:
                 entries.append(ContextEntry(path=relative, reason=exclusion, status="excluded"))
                 continue
             review_files.append(relative)
-            content = self._selected_content(git, target, relative)
+            content = self._selected_content(git, target, relative, revision)
             if content is None:
                 entries.append(
                     ContextEntry(
@@ -129,7 +131,7 @@ class ContextBuilder:
             )
 
         for relative, relationship, content in self._related_context(
-            git, target, changed_files, matcher
+            git, target, changed_files, matcher, revision
         ):
             excerpt = content[:MAX_RELATED_EXCERPT]
             related_status: Literal["included", "truncated"] = (
@@ -185,6 +187,16 @@ class ContextBuilder:
                         status="included",
                     )
                 )
+        if target == "commit" and comparison_note:
+            sections.append("## Commit comparison semantics\n" + comparison_note)
+            entries.append(
+                ContextEntry(
+                    path="<commit-comparison>",
+                    reason="commit review comparison semantics",
+                    included_characters=len(comparison_note),
+                    status="included",
+                )
+            )
 
         content = "\n\n".join(sections)
         redacted = redact_secrets(content)
@@ -230,20 +242,23 @@ class ContextBuilder:
             checks=checks,
             target=target,
             base_revision=base_revision,
+            revision=revision,
+            comparison_note=comparison_note,
         )
 
     def _exclusion(
         self,
         git: GitRunner,
-        target: Literal["staged", "branch", "pull_request"],
+        target: Literal["staged", "commit", "branch", "pull_request"],
         relative: str,
         matcher: pathspec.GitIgnoreSpec,
+        revision: str | None,
     ) -> str | None:
         if matcher.match_file(relative):
             return "ignore rule"
         if Path(relative).suffix.lower() in BINARY_SUFFIXES:
             return "binary file type"
-        size = self._selected_size(git, target, relative)
+        size = self._selected_size(git, target, relative, revision)
         if size is not None and size > MAX_CONTEXT_FILE_BYTES:
             return f"file exceeds {MAX_CONTEXT_FILE_BYTES}-byte context limit"
         return None
@@ -251,9 +266,10 @@ class ContextBuilder:
     def _related_context(
         self,
         git: GitRunner,
-        target: Literal["staged", "branch", "pull_request"],
+        target: Literal["staged", "commit", "branch", "pull_request"],
         changed_files: list[str],
         matcher: pathspec.GitIgnoreSpec,
+        revision: str | None,
     ) -> list[tuple[str, str, str]]:
         tokens = sorted(
             {Path(path).stem.lower() for path in changed_files if len(Path(path).stem) >= 3}
@@ -263,9 +279,11 @@ class ContextBuilder:
         candidates: list[tuple[int, str, str, str]] = []
         tracked = sorted(filter(None, git.run("ls-files", "-z").stdout.split("\0")))
         for relative in tracked:
-            if relative in changed_files or self._exclusion(git, target, relative, matcher):
+            if relative in changed_files or self._exclusion(
+                git, target, relative, matcher, revision
+            ):
                 continue
-            content = self._selected_content(git, target, relative)
+            content = self._selected_content(git, target, relative, revision)
             if content is None or "\x00" in content:
                 continue
             relationship = self._relationship(relative, content, tokens)
@@ -307,11 +325,12 @@ class ContextBuilder:
     def _selected_size(
         self,
         git: GitRunner,
-        target: Literal["staged", "branch", "pull_request"],
+        target: Literal["staged", "commit", "branch", "pull_request"],
         relative: str,
+        revision: str | None,
     ) -> int | None:
-        revision = f":{relative}" if target == "staged" else f"HEAD:{relative}"
-        result = git.run("cat-file", "-s", revision, check=False)
+        selected = f":{relative}" if target == "staged" else f"{revision or 'HEAD'}:{relative}"
+        result = git.run("cat-file", "-s", selected, check=False)
         if result.returncode != 0:
             return None
         try:
@@ -322,17 +341,19 @@ class ContextBuilder:
     def _selected_content(
         self,
         git: GitRunner,
-        target: Literal["staged", "branch", "pull_request"],
+        target: Literal["staged", "commit", "branch", "pull_request"],
         relative: str,
+        revision: str | None,
     ) -> str | None:
-        revision = f":{relative}" if target == "staged" else f"HEAD:{relative}"
-        result = git.run("show", revision, check=False)
+        selected = f":{relative}" if target == "staged" else f"{revision or 'HEAD'}:{relative}"
+        result = git.run("show", selected, check=False)
         return result.stdout if result.returncode == 0 else None
 
     def _diff_args(
         self,
-        target: Literal["staged", "branch", "pull_request"],
+        target: Literal["staged", "commit", "branch", "pull_request"],
         base_revision: str | None,
+        revision: str | None,
     ) -> tuple[str, ...]:
         if target == "staged":
             return ("diff", "--cached")
@@ -340,7 +361,11 @@ class ContextBuilder:
             raise CodePreflightError(
                 "base_branch_required", f"A base revision is required for {target} review"
             )
-        return ("diff", f"{base_revision}..HEAD")
+        if target == "commit" and base_revision == "<root>":
+            if not revision:
+                raise CodePreflightError("revision_required", "A revision is required")
+            return ("diff-tree", "--root", "--no-commit-id", "-r", revision)
+        return ("diff", f"{base_revision}..{revision or 'HEAD'}")
 
     def _relevant_excerpt(self, diff: str, relative: str, content: str) -> str:
         marker = f"+++ b/{relative}"

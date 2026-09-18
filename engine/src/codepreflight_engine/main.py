@@ -16,6 +16,7 @@ from .commit import create_commit, prepare_commit
 from .config import load_config
 from .doctor import doctor_report
 from .errors import CodePreflightError
+from .git_actions import GitActions
 from .hooks import HookManager
 from .initialize import initialize_repository
 from .intelligence import RepositoryIntelligence
@@ -29,6 +30,7 @@ from .pull_request import prepare_pull_request
 from .repository import RepositoryInspector
 from .review import ReviewOrchestrator
 from .trust import is_trusted
+from .workspace import RepositoryWorkspace
 
 
 def emit(event: EngineEvent) -> None:
@@ -46,6 +48,12 @@ def request_event(request_id: str, event: str, payload: dict[str, Any]) -> None:
 
 def dispatch(request: EngineRequest) -> None:
     path = Path(request.repositoryPath).resolve()
+    if request.command == "workspace":
+        complete(request.requestId, RepositoryWorkspace().run(path, request.payload))
+        return
+    if request.command == "git_action":
+        complete(request.requestId, GitActions().run(path, request.payload))
+        return
     if request.command == "doctor":
         complete(request.requestId, doctor_report(path))
         return

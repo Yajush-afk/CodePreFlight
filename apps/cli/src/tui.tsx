@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import TextInput from "ink-text-input";
+import SelectInput from "ink-select-input";
 import { loginProvider } from "./provider-auth.js";
 import {
   SessionController,
@@ -156,20 +157,50 @@ export function SessionView({
         </Box>
       )}
 
+      {state.overlay && !state.pendingDecision && (
+        <Box
+          marginTop={1}
+          paddingX={1}
+          flexDirection="column"
+          borderStyle="round"
+          borderColor="cyan"
+        >
+          <Text bold color="cyan">
+            {state.overlay.title}
+          </Text>
+          {state.overlay.body ? (
+            <>
+              <Text>{state.overlay.body.slice(0, 12000)}</Text>
+              <Text dimColor>Esc close</Text>
+            </>
+          ) : (
+            <SelectInput
+              items={(state.overlay.items ?? []).map((item) => ({
+                label: item.label,
+                value: item.command,
+              }))}
+              onSelect={(item) => onSubmit(item.value)}
+              limit={12}
+            />
+          )}
+        </Box>
+      )}
+
       <Box marginTop={1} borderStyle="single" borderColor="gray" paddingX={1}>
         <Text color="cyan">› </Text>
         <TextInput
           value={input}
           onChange={onInput}
           onSubmit={onSubmit}
-          focus={!state.busy && !state.pendingDecision}
+          focus={!state.busy && !state.pendingDecision && !state.overlay}
           placeholder={
             state.busy ? "Working…" : "Ask about this repository or type /help"
           }
         />
       </Box>
       <Text dimColor>
-        /review staged · /status · /provider · /help · Ctrl+C cancel/exit
+        /tree · /commits · /review staged · /provider · /help · Ctrl+C
+        cancel/exit
       </Text>
     </Box>
   );
@@ -215,6 +246,7 @@ export function App({
   useInput(
     (value, key) => {
       if (key.ctrl && value === "c") controller.cancel();
+      if (key.escape && state.overlay) void controller.submit("/close");
       if (state.pendingDecision && (value === "y" || value === "n")) {
         void controller.confirm(state.pendingDecision.id, value === "y");
       }

@@ -49,6 +49,44 @@ class FakeEngine implements SessionEngine {
       };
     }
     if (command === "provider") return providers;
+    if (command === "workspace") {
+      if (payload.action === "tree") {
+        return {
+          items: [{ path: "auth.py", status: "modified", tracked: true }],
+        };
+      }
+      if (payload.action === "branches") {
+        return {
+          current: "feature/auth",
+          items: [
+            { name: "feature/auth", current: true, subject: "Work" },
+            { name: "main", current: false, subject: "Stable" },
+          ],
+        };
+      }
+      if (payload.action === "commits") {
+        return {
+          items: [{ oid: "abc123", shortOid: "abc123", subject: "Work" }],
+        };
+      }
+      if (payload.action === "file") {
+        return { path: payload.path, diff: "diff --git a/auth.py b/auth.py" };
+      }
+      if (payload.action === "pr") return { found: false };
+    }
+    if (command === "git_action") {
+      if (payload.action === "switch_preview") {
+        return {
+          allowed: true,
+          currentBranch: "feature/auth",
+          targetBranch: payload.branch,
+          expectedHead: "abc123",
+          preservedPaths: [],
+          collisions: [],
+        };
+      }
+      return { branch: payload.branch };
+    }
     if (command === "review") {
       if (!payload.remoteApproved) {
         onEvent?.({
@@ -224,5 +262,47 @@ describe("SessionController", () => {
 
     expect(controller.state.transcript).toEqual([]);
     expect(listener).toHaveBeenCalled();
+  });
+
+  it("opens repository browsers and routes a commit selection deterministically", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/commits");
+
+    expect(controller.state.overlay?.kind).toBe("commits");
+    expect(controller.state.overlay?.items?.[0]?.command).toBe(
+      "/review commit abc123",
+    );
+  });
+
+  it("previews and explicitly confirms a local branch switch", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/switch main");
+    const decision = controller.state.pendingDecision;
+    expect(decision?.title).toBe("Switch to main?");
+
+    await controller.confirm(decision!.id, true);
+
+    expect(engine.requests).toContainEqual({
+      command: "git_action",
+      payload: {
+        action: "switch_execute",
+        branch: "main",
+        approved: true,
+        expectedHead: "abc123",
+      },
+    });
+    expect(controller.state.transcript.at(-1)?.title).toBe("Branch changed");
   });
 });

@@ -76,6 +76,80 @@ engineCommand("status", "show repository status and detected project context");
 engineCommand("doctor", "check the local CodePreFlight environment");
 engineCommand("providers", "show detected AI providers");
 
+const workspace = program
+  .command("workspace")
+  .description(
+    "inspect repository files, branches, commits, and pull requests",
+  );
+for (const action of ["tree", "branches", "commits", "pr"] as const) {
+  workspace
+    .command(action)
+    .description(`show repository ${action}`)
+    .option("--json", "print machine-readable JSON")
+    .action(async (options: { json?: boolean }) => {
+      try {
+        const result = await client.request(
+          "workspace",
+          resolve(process.cwd()),
+          { action },
+        );
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(
+          `${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exitCode = 2;
+      }
+    });
+}
+
+program
+  .command("switch <branch>")
+  .description(
+    "preview or execute a guarded switch to an existing local branch",
+  )
+  .option("--yes", "approve the branch switch after a fresh safety preview")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (branch: string, options: { yes?: boolean; json?: boolean }) => {
+      try {
+        const preview = await client.request(
+          "git_action",
+          resolve(process.cwd()),
+          { action: "switch_preview", branch },
+        );
+        if (!options.yes) {
+          printValue(preview, Boolean(options.json));
+          process.stderr.write(
+            "Preview only; rerun with --yes to execute the approved switch.\n",
+          );
+          return;
+        }
+        if (!preview.allowed) {
+          printValue(preview, Boolean(options.json));
+          process.exitCode = 2;
+          return;
+        }
+        const result = await client.request(
+          "git_action",
+          resolve(process.cwd()),
+          {
+            action: "switch_execute",
+            branch,
+            approved: true,
+            expectedHead: preview.expectedHead,
+          },
+        );
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(
+          `${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exitCode = 2;
+      }
+    },
+  );
+
 const provider = program
   .command("provider")
   .description("configure and verify AI providers");
@@ -282,6 +356,7 @@ program
   .command("review")
   .description("review repository changes")
   .option("--staged", "review the staged change set")
+  .option("--commit <revision>", "review a reachable local commit")
   .option("--branch", "review the current branch against its base")
   .option("--base <branch>", "override the detected base branch")
   .option("--provider <provider>", "override the configured provider")
@@ -295,6 +370,7 @@ program
   .action(
     async (options: {
       staged?: boolean;
+      commit?: string;
       branch?: boolean;
       base?: string;
       provider?: string;
@@ -303,9 +379,14 @@ program
       hook?: boolean;
       json?: boolean;
     }) => {
-      if (options.staged === options.branch) {
+      const targets = [
+        Boolean(options.staged),
+        Boolean(options.commit),
+        Boolean(options.branch),
+      ].filter(Boolean).length;
+      if (targets !== 1) {
         process.stderr.write(
-          "Choose exactly one review target: --staged or --branch\n",
+          "Choose exactly one review target: --staged, --commit <revision>, or --branch\n",
         );
         process.exitCode = 2;
         return;
@@ -315,7 +396,12 @@ program
           "review",
           resolve(process.cwd()),
           {
-            target: options.branch ? "branch" : "staged",
+            target: options.commit
+              ? "commit"
+              : options.branch
+                ? "branch"
+                : "staged",
+            revision: options.commit,
             base: options.base,
             provider: options.provider,
             remoteApproved: Boolean(options.approve),

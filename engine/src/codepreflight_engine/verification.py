@@ -21,11 +21,12 @@ class FindingVerifier:
         *,
         target: str = "staged",
         base_revision: str | None = None,
+        revision: str | None = None,
     ) -> tuple[list[Finding], int]:
         verified: list[Finding] = []
         rejected = 0
         for draft in drafts:
-            finding = self._verify_one(root, draft, target, base_revision)
+            finding = self._verify_one(root, draft, target, base_revision, revision)
             if finding.verification == VerificationState.REJECTED:
                 rejected += 1
                 continue
@@ -34,9 +35,14 @@ class FindingVerifier:
         return verified, rejected
 
     def _verify_one(
-        self, root: Path, draft: FindingDraft, target: str, base_revision: str | None
+        self,
+        root: Path,
+        draft: FindingDraft,
+        target: str,
+        base_revision: str | None,
+        revision: str | None,
     ) -> Finding:
-        changed_lines = self._changed_lines(root, target, base_revision)
+        changed_lines = self._changed_lines(root, target, base_revision, revision)
         checks = 0
         successes = 0
         notes: list[str] = []
@@ -52,7 +58,7 @@ class FindingVerifier:
             except ValueError:
                 notes.append(f"Evidence path escapes the repository: {evidence.path}")
                 continue
-            content = self._selected_content(git, target, normalized_path)
+            content = self._selected_content(git, target, normalized_path, revision)
             if content is None:
                 notes.append(f"Evidence file does not exist in reviewed state: {evidence.path}")
                 continue
@@ -115,15 +121,22 @@ class FindingVerifier:
             verification_notes=notes,
         )
 
-    def _selected_content(self, git: GitRunner, target: str, path: str) -> str | None:
-        revision = f":{path}" if target == "staged" else f"HEAD:{path}"
-        result = git.run("show", revision, check=False)
+    def _selected_content(
+        self, git: GitRunner, target: str, path: str, revision: str | None
+    ) -> str | None:
+        selected = f":{path}" if target == "staged" else f"{revision or 'HEAD'}:{path}"
+        result = git.run("show", selected, check=False)
         return result.stdout if result.returncode == 0 else None
 
     def _changed_lines(
-        self, root: Path, target: str, base_revision: str | None
+        self, root: Path, target: str, base_revision: str | None, revision: str | None
     ) -> dict[str, set[int]]:
-        args = ["diff", "--cached"] if target == "staged" else ["diff", f"{base_revision}..HEAD"]
+        if target == "staged":
+            args = ["diff", "--cached"]
+        elif target == "commit" and base_revision == "<root>":
+            args = ["diff-tree", "--root", "--no-commit-id", "-r", revision or "HEAD"]
+        else:
+            args = ["diff", f"{base_revision}..{revision or 'HEAD'}"]
         diff = GitRunner(root).run(*args, "--unified=0", "--no-ext-diff").stdout
         changed: dict[str, set[int]] = {}
         current: str | None = None
