@@ -10,6 +10,8 @@ import tomli_w
 from .base import BaseResolver
 from .config import load_config, repository_config_path
 from .errors import CodePreflightError
+from .models import ProviderAvailability
+from .providers import discover_providers
 from .trust import trust_repository
 
 
@@ -47,9 +49,20 @@ def propose_configuration(root: Path) -> dict[str, Any]:
             ]
         )
     base = BaseResolver().resolve(root, required=False)
+    ready_provider = next(
+        (
+            provider.id
+            for provider in discover_providers({})
+            if provider.availability == ProviderAvailability.READY
+        ),
+        None,
+    )
+    review: dict[str, Any] = {"context_limit": 60000, "policy": "warning"}
+    if ready_provider:
+        review["provider"] = ready_provider
     config: dict[str, Any] = {
         "version": 1,
-        "review": {"provider": "ollama", "context_limit": 60000, "policy": "warning"},
+        "review": review,
         "checks": checks,
         "ignore": [
             "node_modules/",

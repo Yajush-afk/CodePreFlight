@@ -123,4 +123,37 @@ process.stdin.resume();
       code: "engine_launcher_missing",
     });
   });
+
+  it("preserves structured recovery details from engine failures", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "codepreflight-recovery-"));
+    const engine = join(fixture, "recovery-engine.mjs");
+    writeFileSync(
+      engine,
+      `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({protocolVersion:1,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.stdin.on("data", chunk => {
+  const request = JSON.parse(chunk.toString());
+  process.stdout.write(JSON.stringify({protocolVersion:1,requestId:request.requestId,event:"error",error:{code:"provider_model_missing",message:"Model missing",recoverable:true,details:{actions:[{type:"pull_ollama_model",provider:"ollama",model:"qwen2.5-coder:7b"}]}}}) + "\\n");
+});
+`,
+    );
+    chmodSync(engine, 0o755);
+
+    await expect(
+      new EngineClient({ engineCommand: [engine] }).status(repository),
+    ).rejects.toMatchObject<Partial<EngineRequestError>>({
+      code: "provider_model_missing",
+      recoverable: true,
+      details: {
+        actions: [
+          {
+            type: "pull_ollama_model",
+            provider: "ollama",
+            model: "qwen2.5-coder:7b",
+          },
+        ],
+      },
+    });
+    rmSync(fixture, { recursive: true, force: true });
+  });
 });

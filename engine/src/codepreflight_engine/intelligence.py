@@ -17,8 +17,8 @@ from .git import GitRunner
 from .models import (
     ExplanationEvidence,
     ExplanationResponse,
+    ProviderAvailability,
     ProviderKind,
-    ProviderState,
     RepositoryAnswer,
 )
 from .secrets import redact_secrets
@@ -37,10 +37,13 @@ class RepositoryIntelligence:
         adapter = ProviderRegistry(config).adapter(
             str(payload.get("provider") or config.get("review", {}).get("provider", "ollama"))
         )
-        if adapter.descriptor.state not in {ProviderState.INSTALLED, ProviderState.READY}:
+        if adapter.descriptor.availability != ProviderAvailability.READY:
             raise CodePreflightError(
                 "provider_unavailable",
-                f"Provider {adapter.descriptor.name} is {adapter.descriptor.state.value}",
+                f"Provider {adapter.descriptor.name} is not review-capable: "
+                f"{adapter.descriptor.detail or adapter.descriptor.availability.value}",
+                recoverable=True,
+                details={"actions": [{"type": "select_provider"}]},
             )
         if adapter.descriptor.kind == ProviderKind.SUBSCRIPTION_CLI and not is_trusted(root):
             raise CodePreflightError(

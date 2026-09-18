@@ -110,11 +110,51 @@ class ProviderState(StrEnum):
     ERROR = "error"
 
 
+class InstallationState(StrEnum):
+    INSTALLED = "installed"
+    MISSING = "missing"
+
+
+class AuthenticationState(StrEnum):
+    AUTHENTICATED = "authenticated"
+    REQUIRED = "required"
+    UNKNOWN = "unknown"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class ModelState(StrEnum):
+    READY = "ready"
+    MISSING = "missing"
+    SELECTION_REQUIRED = "selection_required"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class InvocationState(StrEnum):
+    VERIFIED = "verified"
+    UNTESTED = "untested"
+    INCOMPATIBLE = "incompatible"
+    FAILED = "failed"
+
+
+class ProviderAvailability(StrEnum):
+    READY = "ready"
+    DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
+
+
 class ProviderDescriptor(StrictModel):
     id: str
     name: str
     kind: ProviderKind
-    state: ProviderState
+    # `state` remains during the protocol transition for older direct-command consumers.
+    state: ProviderState | None = None
+    installation: InstallationState = InstallationState.INSTALLED
+    authentication: AuthenticationState = AuthenticationState.NOT_APPLICABLE
+    model: ModelState = ModelState.NOT_APPLICABLE
+    invocation: InvocationState = InvocationState.UNTESTED
+    availability: ProviderAvailability = ProviderAvailability.READY
+    model_name: str | None = None
+    experimental: bool = False
     executable: str | None = None
     version: str | None = None
     sends_code_remotely: bool

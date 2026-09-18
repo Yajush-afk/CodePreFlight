@@ -11,14 +11,20 @@ from codepreflight_engine.adapters.cli import (
 )
 from codepreflight_engine.adapters.http import OllamaAdapter, OpenAICompatibleAdapter
 from codepreflight_engine.errors import CodePreflightError
-from codepreflight_engine.models import ProviderState
+from codepreflight_engine.finding_schema import parse_provider_response, provider_output_schema
+from codepreflight_engine.models import (
+    AuthenticationState,
+    ModelState,
+    ProviderAvailability,
+    ProviderState,
+)
 from codepreflight_engine.providers import discover_providers
 
 
 class ProviderRegistry:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self.descriptors = {item.id: item for item in discover_providers()}
+        self.descriptors = {item.id: item for item in discover_providers(config)}
 
     def adapter(self, provider_id: str) -> ProviderAdapter:
         descriptor = self.descriptors.get(provider_id)
@@ -42,7 +48,13 @@ class ProviderRegistry:
             api_key_env = str(provider_config.get("api_key_env", "OPENAI_API_KEY"))
             if os.environ.get(api_key_env):
                 descriptor = descriptor.model_copy(
-                    update={"state": ProviderState.READY, "detail": f"uses {api_key_env}"}
+                    update={
+                        "state": ProviderState.READY,
+                        "authentication": AuthenticationState.AUTHENTICATED,
+                        "model": ModelState.READY,
+                        "availability": ProviderAvailability.READY,
+                        "detail": f"uses {api_key_env}",
+                    }
                 )
             return OpenAICompatibleAdapter(
                 descriptor,
@@ -51,3 +63,17 @@ class ProviderRegistry:
                 api_key_env=api_key_env,
             )
         raise CodePreflightError("unsupported_provider", f"Unsupported provider: {provider_id}")
+
+    def smoke_test(self, provider_id: str) -> dict[str, object]:
+        adapter = self.adapter(provider_id)
+        output = adapter.review(
+            "Review this synthetic empty change. Return summary 'Provider ready.' and no "
+            "findings. Return only schema-valid JSON.",
+            provider_output_schema(),
+        )
+        response = parse_provider_response(output)
+        return {
+            "provider": provider_id,
+            "ready": True,
+            "summary": response.summary,
+        }

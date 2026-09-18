@@ -17,8 +17,8 @@ from .finding_schema import parse_provider_response, provider_output_schema
 from .models import (
     BlastRadiusItem,
     Finding,
+    ProviderAvailability,
     ProviderKind,
-    ProviderState,
     ReviewFailure,
     ReviewResult,
     Severity,
@@ -84,9 +84,23 @@ class ReviewOrchestrator:
         )
         adapter = ProviderRegistry(config).adapter(provider_id)
         provider = adapter.descriptor
-        if provider.state not in {ProviderState.INSTALLED, ProviderState.READY}:
+        if provider.availability != ProviderAvailability.READY:
+            actions: list[dict[str, str]] = [{"type": "select_provider"}]
+            if provider.id == "ollama" and provider.model_name:
+                actions.insert(
+                    0,
+                    {
+                        "type": "pull_ollama_model",
+                        "provider": "ollama",
+                        "model": provider.model_name,
+                    },
+                )
             raise CodePreflightError(
-                "provider_unavailable", f"Provider {provider.name} is {provider.state.value}"
+                "provider_unavailable",
+                f"Provider {provider.name} is not review-capable: "
+                f"{provider.detail or provider.availability.value}",
+                recoverable=True,
+                details={"provider": provider.model_dump(mode="json"), "actions": actions},
             )
         if provider.kind == ProviderKind.SUBSCRIPTION_CLI and not is_trusted(root):
             raise CodePreflightError(

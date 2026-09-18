@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from .adapters import ProviderRegistry
 from .cache import ReviewCache
 from .commit import create_commit, prepare_commit
 from .config import load_config
@@ -59,9 +60,25 @@ def dispatch(request: EngineRequest) -> None:
             return
         raise CodePreflightError("invalid_cache_action", "Cache action must be status or clear")
     if request.command == "providers":
+        config = load_config(path)
+        if request.payload.get("action") == "test":
+            provider_id = str(request.payload.get("provider", ""))
+            if not provider_id:
+                raise CodePreflightError(
+                    "provider_required", "A provider is required for a smoke test"
+                )
+            complete(
+                request.requestId,
+                ProviderRegistry(config).smoke_test(provider_id),
+            )
+            return
         complete(
             request.requestId,
-            {"providers": [provider.model_dump(mode="json") for provider in discover_providers()]},
+            {
+                "providers": [
+                    provider.model_dump(mode="json") for provider in discover_providers(config)
+                ]
+            },
         )
         return
     if request.command == "commit":
