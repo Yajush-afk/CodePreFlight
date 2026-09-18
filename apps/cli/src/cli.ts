@@ -520,6 +520,7 @@ for (const mode of ["diff", "branch"] as const) {
               provider: options.provider,
               remoteApproved: Boolean(options.approve),
             },
+            printProviderDisclosure,
           );
           if (options.json) printValue(result, true);
           else printExplanation(result);
@@ -550,13 +551,18 @@ explain
       },
     ) => {
       try {
-        const result = await client.request("explain", resolve(process.cwd()), {
-          mode: "history",
-          path,
-          line: options.line,
-          provider: options.provider,
-          remoteApproved: Boolean(options.approve),
-        });
+        const result = await client.request(
+          "explain",
+          resolve(process.cwd()),
+          {
+            mode: "history",
+            path,
+            line: options.line,
+            provider: options.provider,
+            remoteApproved: Boolean(options.approve),
+          },
+          printProviderDisclosure,
+        );
         if (options.json) printValue(result, true);
         else printExplanation(result);
       } catch (error) {
@@ -588,14 +594,19 @@ program
       },
     ) => {
       try {
-        const result = await client.request("explain", resolve(process.cwd()), {
-          mode: "ask",
-          question,
-          target: options.branch ? "branch" : "staged",
-          base: options.base,
-          provider: options.provider,
-          remoteApproved: Boolean(options.approve),
-        });
+        const result = await client.request(
+          "explain",
+          resolve(process.cwd()),
+          {
+            mode: "ask",
+            question,
+            target: options.branch ? "branch" : "staged",
+            base: options.base,
+            provider: options.provider,
+            remoteApproved: Boolean(options.approve),
+          },
+          printProviderDisclosure,
+        );
         if (options.json) printValue(result, true);
         else printExplanation(result);
       } catch (error) {
