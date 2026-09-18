@@ -38,9 +38,13 @@ terminal view, or use direct commands:
 ```bash
 preflight status
 preflight init
-preflight providers
+preflight provider list
 preflight review --staged
+preflight review --commit HEAD
 preflight review --branch
+preflight workspace tree
+preflight automation status
+preflight scan full
 preflight pr prepare
 ```
 
@@ -60,12 +64,20 @@ preparation performs the deep review and drafts a title and description while di
 checks actually run from tests merely recommended.
 
 Each finding includes severity, confidence, evidence, verification state, impact, and a
-recommended action. In the interactive view, use `f` to filter severity, the arrow keys to
-select a finding, and Enter to inspect its diff, related files, recent history, and suggested
-tests. Reviews advise by default; only verified severities configured by the repository can
-block a managed hook. Operational provider failures are fail-open unless the repository
-explicitly opts into fail-closed behavior. Standard `git commit --no-verify` and the temporary
-`PREFLIGHT_BYPASS=1` environment variable remain explicit bypass routes.
+recommended action. Running `preflight` opens an ephemeral repository session with a persistent
+composer. Use `/tree`, `/branches`, `/commits`, `/review staged`, `/review commit <revision>`,
+`/review branch`, `/review pr`, `/mode`, `/scan full`, and `/help`; plain-language questions stay
+scoped to repository, Git, review, and history evidence. Arrow keys navigate focused lists and
+composer history. Reviews advise by default; only verified severities configured by the
+repository can block a managed hook. Operational provider failures are fail-open unless the
+repository explicitly opts into fail-closed behavior. Standard `git commit --no-verify` and the
+temporary `PREFLIGHT_BYPASS=1` environment variable remain explicit bypass routes.
+
+Provider authentication remains provider-owned. `preflight provider login codex` launches the
+Codex login flow, while `preflight provider login opencode` launches OpenCode authentication.
+Ollama stays local and requires an installed model; API providers read named environment
+variables and CodePreFlight never stores the secret value. Use
+`preflight provider test <id> --yes` for a synthetic smoke test that sends no repository content.
 
 ## Reproducible seeded-defect demonstration
 
@@ -106,5 +118,8 @@ approval. CodePreFlight does not push, force-push, merge, rebase, or delete bran
 Detailed operational documentation:
 
 - [Installation, upgrade, and uninstall](docs/INSTALL.md)
+- [Interactive repository session](docs/INTERACTIVE_SESSION.md)
+- [Provider setup and authentication](docs/PROVIDERS.md)
+- [Acceptance demo recording guide](docs/DEMO.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Privacy, local logs, and threat model](docs/PRIVACY_AND_SECURITY.md)

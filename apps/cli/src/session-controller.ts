@@ -58,7 +58,7 @@ export interface SessionOverlayItem {
 }
 
 export interface SessionOverlay {
-  kind: "tree" | "branches" | "commits" | "providers" | "preview";
+  kind: "tree" | "branches" | "commits" | "providers" | "preview" | "help";
   title: string;
   items?: SessionOverlayItem[];
   body?: string;
@@ -72,6 +72,10 @@ export interface SessionState {
   transcript: TranscriptEntry[];
   pendingDecision?: PendingDecision;
   overlay?: SessionOverlay;
+  pipeline?: Array<{
+    label: string;
+    status: "pending" | "active" | "complete" | "failed";
+  }>;
   shouldExit: boolean;
 }
 
@@ -143,6 +147,7 @@ const HELP = [
   "/jobs — inspect background review jobs",
   "/automation grant|revoke — manage closed-session provider approval",
   "/scan full — scan a clean synchronized configured base branch",
+  "/commit [message] — review staged changes and confirm a commit",
   "/provider — inspect provider readiness",
   "/provider login <id> — launch provider-owned authentication",
   "/provider use <id> [model] — preview and select a provider",
@@ -181,6 +186,8 @@ export class SessionController {
   private fullScanManifest?: Record<string, unknown>;
   private pollTimer?: NodeJS.Timeout;
   private readonly seenJobs = new Set<string>();
+  private readonly commandHistory: string[] = [];
+  private historyIndex = 0;
 
   constructor(
     private readonly options: {
@@ -215,7 +222,7 @@ export class SessionController {
         kind: "system",
         title: "Ready for preflight",
         body: header
-          ? `${header.staged} staged · ${header.unstaged} unstaged · ${header.untracked} untracked · ${header.conflicts} conflicts\nTry /review staged, /status, /provider, or ask what changed.`
+          ? `${header.staged} staged · ${header.unstaged} unstaged · ${header.untracked} untracked · ${header.conflicts} conflicts\nSuggested: ${this.suggestedActions(header).join(" · ")}`
           : "Repository session started. Try /status or /help.",
       });
       this.appendAutomationUpdates();
@@ -231,6 +238,8 @@ export class SessionController {
     const value = input.trim();
     if (!value || this.currentState.busy || this.currentState.pendingDecision)
       return;
+    if (this.commandHistory.at(-1) !== value) this.commandHistory.push(value);
+    this.historyIndex = this.commandHistory.length;
     if (value === "/clear") {
       this.patch({ transcript: [] });
       return;
@@ -241,6 +250,15 @@ export class SessionController {
     this.append({ kind: "user", body: value });
     if (value.startsWith("/")) await this.runCommand(value);
     else await this.ask(value);
+  }
+
+  history(direction: "previous" | "next"): string {
+    if (!this.commandHistory.length) return "";
+    this.historyIndex =
+      direction === "previous"
+        ? Math.max(0, this.historyIndex - 1)
+        : Math.min(this.commandHistory.length, this.historyIndex + 1);
+    return this.commandHistory[this.historyIndex] ?? "";
   }
 
   async confirm(decisionId: string, approved: boolean): Promise<void> {
@@ -264,7 +282,7 @@ export class SessionController {
     if (this.active) {
       this.active.abort();
       this.active = undefined;
-      this.patch({ busy: false, activity: undefined });
+      this.patch({ busy: false, activity: undefined, pipeline: undefined });
       this.append({ kind: "system", body: "Active request cancelled." });
     } else {
       this.patch({ shouldExit: true });
@@ -291,12 +309,17 @@ export class SessionController {
 
   private async runCommand(value: string): Promise<void> {
     const [command, ...args] = value.slice(1).split(/\s+/);
+    if (command !== "review" && command !== "scan") {
+      this.patch({ pipeline: undefined });
+    }
     if (command === "quit" || command === "exit") {
       this.patch({ shouldExit: true });
       return;
     }
     if (command === "help") {
-      this.append({ kind: "system", title: "Commands", body: HELP });
+      this.patch({
+        overlay: { kind: "help", title: "Commands and questions", body: HELP },
+      });
       return;
     }
     if (command === "close") {
@@ -373,6 +396,10 @@ export class SessionController {
     }
     if (command === "scan" && args[0] === "full") {
       await this.fullScan(false);
+      return;
+    }
+    if (command === "commit") {
+      await this.commit(args.length ? args.join(" ") : undefined);
       return;
     }
     if (command === "provider") {
@@ -670,6 +697,19 @@ export class SessionController {
     });
   }
 
+  private suggestedActions(header: SessionHeader): string[] {
+    const actions: string[] = [];
+    if (!header.providerId || header.providerAvailability !== "ready")
+      actions.push("/provider");
+    if (header.conflicts) actions.push("resolve conflicts, then /status");
+    else if (header.staged) actions.push("/review staged");
+    else if (header.unstaged || header.untracked) actions.push("/tree");
+    else if (header.ahead) actions.push("/review branch");
+    else if (header.branch === header.baseBranch) actions.push("/scan full");
+    if (actions.length < 2) actions.push("/commits");
+    return actions.slice(0, 3);
+  }
+
   private appendProviders(): void {
     const body = this.providers
       .map(
@@ -845,6 +885,10 @@ export class SessionController {
       });
       return;
     }
+    this.setPipeline(
+      ["guard", "inventory", "checks", "batches", "verify", "synthesis"],
+      0,
+    );
     await this.runBusy("Preparing guarded full scan…", async () => {
       if (!approved) this.fullScanManifest = undefined;
       const request = this.beginRequest();
@@ -863,6 +907,7 @@ export class SessionController {
           );
           this.lastReview = result as ReviewView;
           this.appendReview(this.lastReview);
+          this.completePipeline();
         } catch (error) {
           if (
             !approved &&
@@ -877,6 +922,93 @@ export class SessionController {
               "approve full scan",
               async () => this.fullScan(true),
             );
+            return;
+          }
+          throw error;
+        }
+      } finally {
+        this.finishRequest(request);
+      }
+    });
+  }
+
+  private async commit(messageOverride?: string): Promise<void> {
+    if (!this.activeProviderId) {
+      this.append({
+        kind: "error",
+        title: "Select a review provider",
+        body: "The commit flow reviews the staged change first. Use /provider.",
+      });
+      return;
+    }
+    const retry = async (): Promise<void> => this.commit(messageOverride);
+    this.setPipeline(
+      ["snapshot", "checks", "context", "provider", "verify"],
+      0,
+    );
+    await this.runBusy("Reviewing staged changes for commit…", async () => {
+      this.disclosure = undefined;
+      const request = this.beginRequest();
+      try {
+        try {
+          const preparation = await this.engine.request(
+            "commit",
+            this.options.repositoryPath,
+            {
+              action: "prepare",
+              provider: this.activeProviderId,
+              remoteApproved: this.activeProviderId
+                ? this.approvedProviders.has(this.activeProviderId)
+                : false,
+            },
+            (event) => this.handleEngineEvent(event),
+            { signal: request.signal },
+          );
+          const review = preparation.review as ReviewView;
+          this.lastReview = review;
+          this.appendReview(review);
+          this.completePipeline();
+          if (review.blocking) {
+            this.append({
+              kind: "error",
+              title: "Commit blocked by review policy",
+              body: "Inspect verified blocking findings before committing.",
+            });
+            return;
+          }
+          const message = messageOverride ?? String(preparation.message ?? "");
+          this.requestDecision(
+            "Create this commit?",
+            `Message: ${message}\nStaged fingerprint: ${String(preparation.fingerprint).slice(0, 12)}\nUse /commit <message> to provide an edited message before approval.`,
+            "create commit",
+            async () => {
+              await this.runBusy("Creating approved commit…", async () => {
+                const result = await this.engine.request(
+                  "commit",
+                  this.options.repositoryPath,
+                  {
+                    action: "execute",
+                    approved: true,
+                    message,
+                    fingerprint: preparation.fingerprint,
+                  },
+                );
+                await this.refreshContext();
+                this.append({
+                  kind: "system",
+                  title: "Commit created",
+                  body: `${String(result.commit ?? result.revision ?? "Commit completed")} · ${message}`,
+                });
+              });
+            },
+          );
+        } catch (error) {
+          if (
+            error instanceof EngineRequestError &&
+            error.code === "provider_consent_required" &&
+            this.disclosure
+          ) {
+            this.requestConsent(retry);
             return;
           }
           throw error;
@@ -977,6 +1109,10 @@ export class SessionController {
       return;
     }
     const retry = async (): Promise<void> => this.review(target, revision);
+    this.setPipeline(
+      ["snapshot", "checks", "context", "provider", "verify"],
+      0,
+    );
     await this.runBusy(
       `Preparing ${target.replace("_", " ")} review…`,
       async () => {
@@ -998,6 +1134,7 @@ export class SessionController {
           );
           this.lastReview = result as ReviewView;
           this.appendReview(this.lastReview);
+          this.completePipeline();
         } catch (error) {
           if (
             error instanceof EngineRequestError &&
@@ -1016,6 +1153,7 @@ export class SessionController {
   }
 
   private async ask(question: string): Promise<void> {
+    this.patch({ pipeline: undefined });
     const findingMatch = question.match(/^explain finding\s+(\d+)$/i);
     if (findingMatch && this.lastReview) {
       const finding = this.lastReview.findings?.[Number(findingMatch[1]) - 1];
@@ -1086,10 +1224,23 @@ export class SessionController {
 
   private handleEngineEvent(event: EngineEvent): void {
     if (event.event === "progress") {
-      this.patch({ activity: String(event.payload?.message ?? "Working…") });
+      const message = String(event.payload?.message ?? "Working…");
+      this.patch({ activity: message });
+      if (/building focused/i.test(message)) this.advancePipeline("context");
+      else if (/requesting review/i.test(message))
+        this.advancePipeline("provider");
+      else if (/verifying/i.test(message)) this.advancePipeline("verify");
     }
     if (event.event === "scan_progress") {
       this.patch({ activity: String(event.payload?.message ?? "Scanning…") });
+      const stage = String(event.payload?.stage ?? "");
+      this.advancePipeline(
+        stage === "review"
+          ? "batches"
+          : stage === "verification"
+            ? "verify"
+            : stage,
+      );
     }
     if (event.event === "consent_required") {
       if (event.payload?.fullScan) {
@@ -1183,13 +1334,22 @@ export class SessionController {
     const failure = error instanceof Error ? error : new Error(String(error));
     const detail =
       failure instanceof EngineRequestError && failure.details?.actions
-        ? `\nRecovery: ${JSON.stringify(failure.details.actions)}`
+        ? `\nNext: ${this.formatRecoveryActions(failure.details.actions)}`
         : "";
     this.append({
       kind: "error",
       title: "Request could not be completed",
       body: `${failure.message}${detail}`,
     });
+    if (this.currentState.pipeline) {
+      this.patch({
+        pipeline: this.currentState.pipeline.map((item) =>
+          item.status === "active"
+            ? { ...item, status: "failed" as const }
+            : item,
+        ),
+      });
+    }
   }
 
   private beginRequest(): AbortController {
@@ -1197,6 +1357,28 @@ export class SessionController {
     const request = new AbortController();
     this.active = request;
     return request;
+  }
+
+  private formatRecoveryActions(value: unknown): string {
+    if (!Array.isArray(value))
+      return "Use /help or retry after resolving the reported state.";
+    return value
+      .map((raw) => {
+        const action = raw as Record<string, unknown>;
+        const type = String(action.type ?? "retry");
+        if (type === "select_provider" || type === "select_model")
+          return "/provider";
+        if (type === "authenticate_provider")
+          return `/provider login ${String(action.provider ?? "<provider>")}`;
+        if (type === "pull_ollama_model")
+          return `preflight provider pull ${String(action.model ?? "<model>")} --yes`;
+        if (type === "trust_repository") return "preflight init --trust";
+        if (type === "open_configuration") return "inspect .codepreflight.toml";
+        if (type === "approve_transmission")
+          return "review the manifest and approve";
+        return "retry after resolving the reported repository state";
+      })
+      .join(" · ");
   }
 
   private finishRequest(request: AbortController): void {
@@ -1220,5 +1402,47 @@ export class SessionController {
   private nextId(prefix: string): string {
     this.sequence += 1;
     return `${prefix}-${this.sequence}`;
+  }
+
+  private setPipeline(labels: string[], activeIndex: number): void {
+    this.patch({
+      pipeline: labels.map((label, index) => ({
+        label,
+        status:
+          index < activeIndex
+            ? "complete"
+            : index === activeIndex
+              ? "active"
+              : "pending",
+      })),
+    });
+  }
+
+  private advancePipeline(label: string): void {
+    const pipeline = this.currentState.pipeline;
+    if (!pipeline) return;
+    const activeIndex = pipeline.findIndex((item) => item.label === label);
+    if (activeIndex < 0) return;
+    this.patch({
+      pipeline: pipeline.map((item, index) => ({
+        ...item,
+        status:
+          index < activeIndex
+            ? "complete"
+            : index === activeIndex
+              ? "active"
+              : "pending",
+      })),
+    });
+  }
+
+  private completePipeline(): void {
+    if (!this.currentState.pipeline) return;
+    this.patch({
+      pipeline: this.currentState.pipeline.map((item) => ({
+        ...item,
+        status: "complete" as const,
+      })),
+    });
   }
 }

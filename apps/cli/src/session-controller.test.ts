@@ -137,6 +137,21 @@ class FakeEngine implements SessionEngine {
         findings: [],
       };
     }
+    if (command === "commit") {
+      if (payload.action === "prepare") {
+        return {
+          message: "feat: generated message",
+          fingerprint: "fingerprint-123",
+          review: {
+            status: "completed",
+            summary: "Staged changes reviewed.",
+            findings: [],
+            blocking: false,
+          },
+        };
+      }
+      return { commit: "deadbeef", message: payload.message };
+    }
     if (command === "review") {
       if (!payload.remoteApproved) {
         onEvent?.({
@@ -399,5 +414,47 @@ describe("SessionController", () => {
     expect(controller.state.transcript.at(-1)?.body).toContain(
       "Full scan complete.",
     );
+  });
+
+  it("keeps ephemeral command history and opens discoverable help", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+    await controller.submit("/status");
+    await controller.submit("/help");
+
+    expect(controller.state.overlay?.kind).toBe("help");
+    expect(controller.state.overlay?.body).toContain("/scan full");
+    expect(controller.history("previous")).toBe("/help");
+    expect(controller.history("previous")).toBe("/status");
+    expect(controller.history("next")).toBe("/help");
+  });
+
+  it("reviews and explicitly confirms an edited commit message", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/commit fix: restore token validation");
+    const decision = controller.state.pendingDecision;
+    expect(decision?.body).toContain("fix: restore token validation");
+    await controller.confirm(decision!.id, true);
+
+    expect(engine.requests).toContainEqual({
+      command: "commit",
+      payload: {
+        action: "execute",
+        approved: true,
+        message: "fix: restore token validation",
+        fingerprint: "fingerprint-123",
+      },
+    });
+    expect(controller.state.transcript.at(-1)?.title).toBe("Commit created");
   });
 });
