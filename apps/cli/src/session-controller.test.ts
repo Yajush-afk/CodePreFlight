@@ -22,6 +22,8 @@ const providers = {
       availability: "ready",
       authentication: "authenticated",
       model: "not_applicable",
+      model_name: "subscription default",
+      kind: "subscription_cli",
       sends_code_remotely: true,
     },
   ],
@@ -33,6 +35,7 @@ class FakeEngine implements SessionEngine {
     payload: Record<string, unknown>;
   }> = [];
   reviewApproved = false;
+  automationMode = "manual";
 
   async request(
     command: EngineCommand,
@@ -51,7 +54,20 @@ class FakeEngine implements SessionEngine {
     if (command === "provider") return providers;
     if (command === "automation") {
       if (payload.action === "status") {
-        return { mode: "manual", grant: null, jobs: [] };
+        return { mode: this.automationMode, grant: null, jobs: [] };
+      }
+      if (payload.action === "event") {
+        return this.automationMode === "manual"
+          ? { mode: "manual", action: "none" }
+          : {
+              mode: this.automationMode,
+              action: "detect_pr",
+              prDetection: {
+                found: true,
+                number: 42,
+                reviewFingerprintCurrent: false,
+              },
+            };
       }
       if (payload.action === "configure") {
         return {
@@ -226,8 +242,24 @@ describe("SessionController", () => {
       ahead: 2,
       behind: 0,
       provider: "Codex CLI",
+      providerAuthentication: "authenticated",
+      providerModel: "subscription default",
+      providerPrivacy: "remote subscription_cli",
     });
     expect(controller.state.transcript.at(-1)?.body).toContain("1 staged");
+  });
+
+  it("shows Auto pull-request detection in the launch header", async () => {
+    const engine = new FakeEngine();
+    engine.automationMode = "auto";
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+
+    await controller.start();
+
+    expect(controller.state.header?.pullRequest).toBe("#42 · review due");
   });
 
   it("routes slash commands without using repository chat", async () => {
