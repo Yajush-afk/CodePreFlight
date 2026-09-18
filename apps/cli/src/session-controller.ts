@@ -50,6 +50,19 @@ export interface PendingDecision {
   confirmLabel: string;
 }
 
+export interface SessionOverlayItem {
+  label: string;
+  value: string;
+  command: string;
+}
+
+export interface SessionOverlay {
+  kind: "tree" | "branches" | "commits" | "providers" | "preview";
+  title: string;
+  items?: SessionOverlayItem[];
+  body?: string;
+}
+
 export interface SessionState {
   started: boolean;
   busy: boolean;
@@ -57,6 +70,7 @@ export interface SessionState {
   header?: SessionHeader;
   transcript: TranscriptEntry[];
   pendingDecision?: PendingDecision;
+  overlay?: SessionOverlay;
   shouldExit: boolean;
 }
 
@@ -113,13 +127,18 @@ type ProviderLogin = (provider: string) => Promise<void>;
 
 const HELP = [
   "/status — refresh repository state",
-  "/review staged|branch|pr — run a focused review",
+  "/tree — browse tracked and untracked files",
+  "/branches — inspect and safely switch local branches",
+  "/commits — browse and review reachable commits",
+  "/review staged|commit <revision>|branch|pr — run a focused review",
+  "/pr — detect an open pull request with GitHub CLI",
   "/provider — inspect provider readiness",
   "/provider login <id> — launch provider-owned authentication",
   "/provider use <id> [model] — preview and select a provider",
   "/provider test <id> — run a synthetic readiness test",
   "/help — show commands",
   "/clear — clear this ephemeral transcript",
+  "/close — close the active browser",
   "/quit — exit CodePreflight",
   "Plain text asks a repository-scoped Git or review question.",
 ].join("\n");
@@ -198,6 +217,9 @@ export class SessionController {
       this.patch({ transcript: [] });
       return;
     }
+    if (value.startsWith("/") && this.currentState.overlay) {
+      this.patch({ overlay: undefined });
+    }
     this.append({ kind: "user", body: value });
     if (value.startsWith("/")) await this.runCommand(value);
     else await this.ask(value);
@@ -211,7 +233,7 @@ export class SessionController {
     if (!approved) {
       this.append({
         kind: "system",
-        body: "Request cancelled; no repository content was sent.",
+        body: "Action cancelled; no repository changes were made.",
       });
       return;
     }
@@ -257,6 +279,10 @@ export class SessionController {
       this.append({ kind: "system", title: "Commands", body: HELP });
       return;
     }
+    if (command === "close") {
+      this.patch({ overlay: undefined });
+      return;
+    }
     if (command === "status") {
       await this.runBusy("Refreshing repository status…", async () => {
         await this.refreshContext();
@@ -266,15 +292,41 @@ export class SessionController {
     }
     if (command === "review") {
       const target = args[0] ?? "staged";
-      if (!(["staged", "branch", "pr"] as string[]).includes(target)) {
+      if (
+        !(["staged", "commit", "branch", "pr"] as string[]).includes(target)
+      ) {
         this.append({
           kind: "error",
           title: "Unknown review target",
-          body: "Use /review staged, /review branch, or /review pr.",
+          body: "Use /review staged, /review commit <revision>, /review branch, or /review pr.",
         });
         return;
       }
-      await this.review(target === "pr" ? "pull_request" : target);
+      if (target === "commit" && !args[1]) {
+        this.append({
+          kind: "error",
+          title: "Commit required",
+          body: "Select a commit with /commits or pass /review commit <revision>.",
+        });
+        return;
+      }
+      await this.review(target === "pr" ? "pull_request" : target, args[1]);
+      return;
+    }
+    if (command === "tree" || command === "branches" || command === "commits") {
+      await this.openWorkspace(command);
+      return;
+    }
+    if (command === "file" && args[0]) {
+      await this.previewFile(decodeURIComponent(args[0]));
+      return;
+    }
+    if (command === "switch" && args[0]) {
+      await this.previewSwitch(decodeURIComponent(args[0]));
+      return;
+    }
+    if (command === "pr") {
+      await this.detectPullRequest();
       return;
     }
     if (command === "provider") {
@@ -289,7 +341,7 @@ export class SessionController {
           "run smoke test",
           async () => this.testProvider(args[1]),
         );
-      } else this.appendProviders();
+      } else this.openProviders();
       return;
     }
     this.append({
@@ -379,6 +431,156 @@ export class SessionController {
     });
   }
 
+  private openProviders(): void {
+    this.appendProviders();
+    this.patch({
+      overlay: {
+        kind: "providers",
+        title: "Review providers",
+        items: this.providers.map((provider) => ({
+          label: `${provider.id === this.activeProviderId ? "●" : "○"} ${provider.name ?? provider.id} · ${provider.availability ?? "unknown"}`,
+          value: provider.id ?? "unknown",
+          command: `/provider use ${provider.id ?? ""}${provider.model_name ? ` ${provider.model_name}` : ""}`,
+        })),
+      },
+    });
+  }
+
+  private async openWorkspace(
+    action: "tree" | "branches" | "commits",
+  ): Promise<void> {
+    await this.runBusy(`Loading ${action}…`, async () => {
+      const result = await this.engine.request(
+        "workspace",
+        this.options.repositoryPath,
+        { action },
+      );
+      const raw =
+        (result.items as Array<Record<string, unknown>> | undefined) ?? [];
+      const items = raw.map((item) => {
+        if (action === "tree") {
+          const path = String(item.path ?? "");
+          return {
+            label: `${String(item.status ?? "clean").padEnd(16)} ${path}`,
+            value: path,
+            command: `/file ${encodeURIComponent(path)}`,
+          };
+        }
+        if (action === "branches") {
+          const branch = String(item.name ?? "");
+          return {
+            label: `${item.current ? "●" : "○"} ${branch} · ${String(item.subject ?? "")}`,
+            value: branch,
+            command: item.current
+              ? "/close"
+              : `/switch ${encodeURIComponent(branch)}`,
+          };
+        }
+        const revision = String(item.oid ?? "");
+        return {
+          label: `${item.merge ? "merge " : ""}${String(item.shortOid ?? "")} · ${String(item.subject ?? "")}`,
+          value: revision,
+          command: `/review commit ${revision}`,
+        };
+      });
+      this.patch({
+        overlay: {
+          kind: action,
+          title:
+            action === "tree"
+              ? "Repository tree"
+              : action === "branches"
+                ? "Local branches"
+                : "Current branch commits",
+          items,
+        },
+      });
+    });
+  }
+
+  private async previewFile(path: string): Promise<void> {
+    await this.runBusy(`Opening ${path}…`, async () => {
+      const result = await this.engine.request(
+        "workspace",
+        this.options.repositoryPath,
+        { action: "file", path },
+      );
+      this.patch({
+        overlay: {
+          kind: "preview",
+          title: path,
+          body: String(
+            result.diff ?? result.content ?? "No preview available.",
+          ),
+        },
+      });
+    });
+  }
+
+  private async previewSwitch(branch: string): Promise<void> {
+    await this.runBusy(`Checking switch to ${branch}…`, async () => {
+      const preview = await this.engine.request(
+        "git_action",
+        this.options.repositoryPath,
+        { action: "switch_preview", branch },
+      );
+      this.patch({ overlay: undefined });
+      if (!preview.allowed) {
+        this.append({
+          kind: "error",
+          title: "Branch switch blocked",
+          body: `Local paths would be overwritten:\n${((preview.collisions as string[]) ?? []).join("\n")}`,
+        });
+        return;
+      }
+      const preserved = ((preview.preservedPaths as string[]) ?? []).join(", ");
+      this.requestDecision(
+        `Switch to ${branch}?`,
+        `Current branch: ${String(preview.currentBranch)}\nPreserved local paths: ${preserved || "none"}`,
+        "switch branch",
+        async () => {
+          await this.runBusy(`Switching to ${branch}…`, async () => {
+            await this.engine.request(
+              "git_action",
+              this.options.repositoryPath,
+              {
+                action: "switch_execute",
+                branch,
+                approved: true,
+                expectedHead: preview.expectedHead,
+              },
+            );
+            this.lastReview = undefined;
+            this.disclosure = undefined;
+            await this.refreshContext();
+            this.append({
+              kind: "system",
+              title: "Branch changed",
+              body: `Switched to ${branch}. Branch-scoped review context was cleared.`,
+            });
+          });
+        },
+      );
+    });
+  }
+
+  private async detectPullRequest(): Promise<void> {
+    await this.runBusy("Checking GitHub pull requests…", async () => {
+      const result = await this.engine.request(
+        "workspace",
+        this.options.repositoryPath,
+        { action: "pr" },
+      );
+      this.append({
+        kind: "status",
+        title: "Pull request",
+        body: result.found
+          ? `#${String(result.number)} · ${String(result.state)} · ${String(result.url)}\nBase: ${String(result.baseBranch)} · local HEAD ${result.localHeadMatches ? "matches" : "differs from"} remote head`
+          : "No open pull request was found for the current branch.",
+      });
+    });
+  }
+
   private async login(provider: string): Promise<void> {
     if (!this.options.loginProvider) {
       this.append({
@@ -459,7 +661,7 @@ export class SessionController {
     );
   }
 
-  private async review(target: string): Promise<void> {
+  private async review(target: string, revision?: string): Promise<void> {
     if (!this.activeProviderId) {
       this.append({
         kind: "error",
@@ -468,7 +670,7 @@ export class SessionController {
       });
       return;
     }
-    const retry = async (): Promise<void> => this.review(target);
+    const retry = async (): Promise<void> => this.review(target, revision);
     await this.runBusy(
       `Preparing ${target.replace("_", " ")} review…`,
       async () => {
@@ -480,6 +682,7 @@ export class SessionController {
             this.options.repositoryPath,
             {
               target,
+              revision,
               remoteApproved: this.activeProviderId
                 ? this.approvedProviders.has(this.activeProviderId)
                 : false,

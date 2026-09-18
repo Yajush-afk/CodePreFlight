@@ -14,6 +14,7 @@ from .config import load_config
 from .context import ContextBuilder
 from .errors import CodePreflightError
 from .finding_schema import parse_provider_response, provider_output_schema
+from .git import GitRunner
 from .models import (
     BlastRadiusItem,
     Finding,
@@ -69,15 +70,25 @@ class ReviewOrchestrator:
                 "run `preflight init --write` or approve it before review",
             )
         target = str(payload.get("target", "staged"))
-        if target not in {"staged", "branch", "pull_request"}:
+        if target not in {"staged", "commit", "branch", "pull_request"}:
             raise CodePreflightError("unsupported_target", f"Unsupported review target: {target}")
-        base_revision = self._base_revision(root, payload, config) if target != "staged" else None
+        revision: str | None = None
+        base_revision: str | None = None
+        comparison_note: str | None = None
+        if target == "commit":
+            revision, base_revision, comparison_note = self._commit_revisions(root, payload)
+        else:
+            base_revision = (
+                self._base_revision(root, payload, config) if target != "staged" else None
+            )
         emit("progress", {"message": f"Building focused {target.replace('_', ' ')} context"})
         context = ContextBuilder().build(
             root,
             config,
-            target=cast(Literal["staged", "branch", "pull_request"], target),
+            target=cast(Literal["staged", "commit", "branch", "pull_request"], target),
             base_revision=base_revision,
+            revision=revision,
+            comparison_note=comparison_note,
         )
         provider_id = str(
             payload.get("provider") or config.get("review", {}).get("provider", "ollama")
@@ -200,6 +211,7 @@ class ReviewOrchestrator:
             response.findings,
             target=target,
             base_revision=base_revision,
+            revision=revision,
         )
         for finding in findings:
             emit("finding", {"finding": finding.model_dump(mode="json")})
@@ -287,7 +299,40 @@ class ReviewOrchestrator:
         return resolution.revision
 
     def _default_depth(self, target: str) -> str:
-        return {"staged": "fast", "branch": "standard", "pull_request": "deep"}[target]
+        return {
+            "staged": "fast",
+            "commit": "fast",
+            "branch": "standard",
+            "pull_request": "deep",
+        }[target]
+
+    def _commit_revisions(self, root: Path, payload: dict[str, Any]) -> tuple[str, str, str]:
+        requested = str(payload.get("revision", "")).strip()
+        if not requested or requested.startswith("-"):
+            raise CodePreflightError("revision_required", "Select a local commit to review")
+        git = GitRunner(root)
+        resolved = git.run("rev-parse", "--verify", f"{requested}^{{commit}}", check=False)
+        if resolved.returncode != 0:
+            raise CodePreflightError(
+                "commit_not_found", f"Commit is not present in this repository: {requested}"
+            )
+        revision = resolved.stdout.strip()
+        containing = git.run(
+            "for-each-ref", "--format=%(refname)", "--contains", revision, "refs/heads", check=False
+        )
+        if not containing.stdout.strip():
+            raise CodePreflightError(
+                "commit_not_reachable",
+                "Commit review is limited to commits reachable from a local branch",
+                recoverable=True,
+            )
+        parents = git.run("rev-list", "--parents", "-n", "1", revision).stdout.split()
+        if len(parents) == 1:
+            return revision, "<root>", "Root commit compared with Git's empty tree."
+        note = "Commit compared with its first parent."
+        if len(parents) > 2:
+            note = "Merge commit compared with its first parent; other parents are not combined."
+        return revision, parents[1], note
 
     def _blocking(self, config: dict[str, Any], findings: list[Finding]) -> bool:
         review = config.get("review", {})

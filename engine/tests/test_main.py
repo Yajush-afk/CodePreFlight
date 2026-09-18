@@ -65,3 +65,24 @@ def test_local_log_excludes_request_payload_and_repository_content(
     log = (state / "codepreflight" / "events.jsonl").read_text(encoding="utf-8")
     assert "super-secret-source-content" not in log
     assert str(git_repository) not in log
+
+
+def test_workspace_request_returns_local_commits(
+    git_repository: Path, capsys: object, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    handle_line(
+        json.dumps(
+            {
+                "protocolVersion": 2,
+                "requestId": "workspace-1",
+                "command": "workspace",
+                "repositoryPath": str(git_repository),
+                "payload": {"action": "commits"},
+            }
+        )
+    )
+    event = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+
+    assert event["event"] == "complete"
+    assert event["payload"]["items"][0]["subject"] == "Initial commit"

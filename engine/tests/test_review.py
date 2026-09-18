@@ -222,3 +222,26 @@ def test_review_depths_have_distinct_focus(depth: str, expected: str) -> None:
     prompt = ReviewOrchestrator()._prompt("diff", depth, [])
 
     assert expected in prompt
+
+
+def test_review_supports_local_commit_against_first_parent(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    git(git_repository, "commit", "-m", "Add feature")
+    revision = git(git_repository, "rev-parse", "HEAD").strip()
+    adapter = FakeAdapter(descriptor(), {"summary": "Commit reviewed.", "findings": []})
+    install_adapter(monkeypatch, adapter)
+
+    result = ReviewOrchestrator().review(
+        git_repository,
+        {"target": "commit", "revision": revision, "provider": "ollama"},
+        lambda event, payload: None,
+    )
+
+    assert result.summary == "Commit reviewed."
+    assert result.context.target == "commit"
+    assert result.context.revision == revision
+    assert "first parent" in result.context.content.lower()

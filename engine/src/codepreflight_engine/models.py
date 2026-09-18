@@ -205,8 +205,10 @@ class ContextPackage(StrictModel):
     manifest: ContextManifest
     changed_files: list[str]
     checks: list[CheckResult]
-    target: Literal["staged", "branch", "pull_request"] = "staged"
+    target: Literal["staged", "commit", "branch", "pull_request"] = "staged"
     base_revision: str | None = None
+    revision: str | None = None
+    comparison_note: str | None = None
 
     @property
     def staged_files(self) -> list[str]:

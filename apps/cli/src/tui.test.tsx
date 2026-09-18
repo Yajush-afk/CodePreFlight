@@ -50,4 +50,34 @@ describe("SessionView", () => {
     expect(frame).toContain("Expired tokens are accepted");
     expect(frame).toContain("explain finding 1");
   });
+
+  it("renders a focused selectable repository overlay", () => {
+    const view = render(
+      <SessionView
+        state={{
+          started: true,
+          busy: false,
+          shouldExit: false,
+          transcript: [],
+          overlay: {
+            kind: "commits",
+            title: "Current branch commits",
+            items: [
+              {
+                label: "abc123 · Fix token validation",
+                value: "abc123",
+                command: "/review commit abc123",
+              },
+            ],
+          },
+        }}
+        input=""
+        onInput={() => {}}
+        onSubmit={() => {}}
+      />,
+    );
+
+    expect(view.lastFrame()).toContain("Current branch commits");
+    expect(view.lastFrame()).toContain("Fix token validation");
+  });
 });
