@@ -49,6 +49,25 @@ class FakeEngine implements SessionEngine {
       };
     }
     if (command === "provider") return providers;
+    if (command === "automation") {
+      if (payload.action === "status") {
+        return { mode: "manual", grant: null, jobs: [] };
+      }
+      if (payload.action === "configure") {
+        return {
+          mode: payload.mode,
+          written: payload.write,
+          hookResults: [
+            { hook: "post-commit", action: "install" },
+            { hook: "pre-push", action: "install" },
+          ],
+        };
+      }
+      if (payload.action === "grant") {
+        return { written: payload.write, grant: { provider: "codex" } };
+      }
+      return { written: payload.write, revoked: true };
+    }
     if (command === "workspace") {
       if (payload.action === "tree") {
         return {
@@ -304,5 +323,24 @@ describe("SessionController", () => {
       },
     });
     expect(controller.state.transcript.at(-1)?.title).toBe("Branch changed");
+  });
+
+  it("previews and confirms a personal review-mode change", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/mode set auto_plus");
+    const decision = controller.state.pendingDecision;
+    expect(decision?.title).toContain("Auto+");
+    await controller.confirm(decision!.id, true);
+
+    expect(engine.requests).toContainEqual({
+      command: "automation",
+      payload: { action: "configure", mode: "auto_plus", write: true },
+    });
   });
 });

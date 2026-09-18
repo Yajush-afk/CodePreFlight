@@ -121,6 +121,9 @@ export function SessionView({
                 </Text>
               )}
             </Text>
+            <Text>
+              Mode: <Text bold>{header.reviewMode.replace("_", "+")}</Text>
+            </Text>
           </Box>
         </Box>
       ) : (

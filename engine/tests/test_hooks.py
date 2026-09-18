@@ -71,3 +71,12 @@ def test_fail_closed_configuration_is_explicit_in_hook(git_repository: Path) -> 
 
     assert "blocking (fail-closed)" in result["preview"]
     assert 'exit "$codepreflight_status"' in result["preview"]
+
+
+def test_post_commit_hook_queues_automation_without_blocking_commit(
+    git_repository: Path,
+) -> None:
+    result = HookManager(git_repository).install("post-commit", write=False)
+
+    assert "preflight automation event post-commit" in result["preview"]
+    assert "exit 1" not in result["preview"]

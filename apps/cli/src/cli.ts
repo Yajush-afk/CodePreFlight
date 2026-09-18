@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -75,6 +76,150 @@ function engineCommand(
 engineCommand("status", "show repository status and detected project context");
 engineCommand("doctor", "check the local CodePreFlight environment");
 engineCommand("providers", "show detected AI providers");
+
+const automation = program
+  .command("automation")
+  .description("configure personal review cadence and automation grants");
+
+automation
+  .command("status")
+  .description("show review mode, grant, and background jobs")
+  .option("--json", "print machine-readable JSON")
+  .action(async (options: { json?: boolean }) => {
+    try {
+      const result = await client.request(
+        "automation",
+        resolve(process.cwd()),
+        { action: "status" },
+      );
+      printValue(result, Boolean(options.json));
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exitCode = 2;
+    }
+  });
+
+automation
+  .command("mode <mode>")
+  .description("preview or select manual, auto, or auto_plus review mode")
+  .option("--write", "apply the mode and managed-hook changes")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (mode: string, options: { write?: boolean; json?: boolean }) => {
+      try {
+        const result = await client.request(
+          "automation",
+          resolve(process.cwd()),
+          { action: "configure", mode, write: Boolean(options.write) },
+        );
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(
+          `${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exitCode = 2;
+      }
+    },
+  );
+
+for (const action of ["grant", "revoke_grant"] as const) {
+  automation
+    .command(action === "grant" ? "grant" : "revoke")
+    .description(
+      action === "grant"
+        ? "preview or approve the current scoped automation grant"
+        : "preview or revoke the repository automation grant",
+    )
+    .option("--write", "apply the grant change")
+    .option("--json", "print machine-readable JSON")
+    .action(async (options: { write?: boolean; json?: boolean }) => {
+      try {
+        const result = await client.request(
+          "automation",
+          resolve(process.cwd()),
+          { action, write: Boolean(options.write) },
+        );
+        if (action === "grant" && options.write) {
+          const resumed =
+            (result.resumedJobs as Array<{ id?: string }> | undefined) ?? [];
+          for (const job of resumed) {
+            if (job.id) launchAutomationWorker(job.id);
+          }
+        }
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(
+          `${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exitCode = 2;
+      }
+    });
+}
+
+function launchAutomationWorker(jobId: string): void {
+  const executable = process.argv[1];
+  if (!executable) return;
+  const worker = spawn(
+    process.execPath,
+    [executable, "automation", "worker", jobId],
+    {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    },
+  );
+  worker.unref();
+}
+
+automation
+  .command("event <event>")
+  .description(
+    "handle a managed launch, refresh, post-commit, or pre-push event",
+  )
+  .option("--json", "print machine-readable JSON")
+  .action(async (event: string, options: { json?: boolean }) => {
+    try {
+      const result = await client.request(
+        "automation",
+        resolve(process.cwd()),
+        { action: "event", event },
+      );
+      const job = result.job as
+        { id?: string; coalesced?: boolean; status?: string } | undefined;
+      if (job?.id && !job.coalesced && job.status === "queued") {
+        launchAutomationWorker(job.id);
+      }
+      if (result.waitingForConsent) {
+        process.stderr.write(
+          "CodePreflight automation is waiting for an approved repository grant; continuing fail-open.\n",
+        );
+      }
+      if (result.blocking) process.exitCode = 1;
+      if (options.json) printValue(result, true);
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exitCode = 2;
+    }
+  });
+
+automation
+  .command("worker <jobId>", { hidden: true })
+  .description("run one bounded queued automation job")
+  .action(async (jobId: string) => {
+    try {
+      await client.request("automation", resolve(process.cwd()), {
+        action: "worker",
+        jobId,
+      });
+    } catch {
+      process.exitCode = 2;
+    }
+  });
 
 const workspace = program
   .command("workspace")

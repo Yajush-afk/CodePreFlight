@@ -32,6 +32,7 @@ export interface SessionHeader {
   provider: string;
   providerId?: string;
   providerAvailability?: string;
+  reviewMode: string;
 }
 
 export interface TranscriptEntry {
@@ -121,6 +122,12 @@ interface ReviewView {
   blocking?: boolean;
 }
 
+interface AutomationView {
+  mode?: string;
+  grant?: Record<string, unknown> | null;
+  jobs?: Array<Record<string, unknown>>;
+}
+
 type Listener = (state: SessionState) => void;
 type Retry = () => Promise<void>;
 type ProviderLogin = (provider: string) => Promise<void>;
@@ -132,6 +139,9 @@ const HELP = [
   "/commits — browse and review reachable commits",
   "/review staged|commit <revision>|branch|pr — run a focused review",
   "/pr — detect an open pull request with GitHub CLI",
+  "/mode — choose Manual, Auto, or Auto+ review cadence",
+  "/jobs — inspect background review jobs",
+  "/automation grant|revoke — manage closed-session provider approval",
   "/provider — inspect provider readiness",
   "/provider login <id> — launch provider-owned authentication",
   "/provider use <id> [model] — preview and select a provider",
@@ -158,6 +168,7 @@ export class SessionController {
   private sequence = 0;
   private providers: ProviderView[] = [];
   private activeProviderId?: string;
+  private automation: AutomationView = {};
   private lastReview?: ReviewView;
   private disclosure?: {
     providerId: string;
@@ -166,6 +177,8 @@ export class SessionController {
     characters: number;
     redactions: number;
   };
+  private pollTimer?: NodeJS.Timeout;
+  private readonly seenJobs = new Set<string>();
 
   constructor(
     private readonly options: {
@@ -194,6 +207,7 @@ export class SessionController {
     this.patch({ busy: true, activity: "Inspecting repository…" });
     try {
       await this.refreshContext();
+      await this.observeAutomationEvent("launch");
       const header = this.currentState.header;
       this.append({
         kind: "system",
@@ -202,7 +216,9 @@ export class SessionController {
           ? `${header.staged} staged · ${header.unstaged} unstaged · ${header.untracked} untracked · ${header.conflicts} conflicts\nTry /review staged, /status, /provider, or ask what changed.`
           : "Repository session started. Try /status or /help.",
       });
+      this.appendAutomationUpdates();
       this.patch({ started: true, busy: false, activity: undefined });
+      this.startJobObservation();
     } catch (error) {
       this.appendError(error);
       this.patch({ started: true, busy: false, activity: undefined });
@@ -256,6 +272,8 @@ export class SessionController {
   dispose(): void {
     this.active?.abort();
     this.active = undefined;
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = undefined;
     this.retries.clear();
     this.consentDecisions.clear();
     this.approvedProviders.clear();
@@ -286,6 +304,7 @@ export class SessionController {
     if (command === "status") {
       await this.runBusy("Refreshing repository status…", async () => {
         await this.refreshContext();
+        await this.observeAutomationEvent("refresh");
         this.appendStatus();
       });
       return;
@@ -329,6 +348,27 @@ export class SessionController {
       await this.detectPullRequest();
       return;
     }
+    if (command === "mode") {
+      if (args[0] === "set" && args[1]) await this.configureMode(args[1]);
+      else this.openModes();
+      return;
+    }
+    if (command === "jobs") {
+      this.appendJobs();
+      return;
+    }
+    if (command === "automation") {
+      if (args[0] === "grant") await this.configureGrant(false);
+      else if (args[0] === "revoke") await this.configureGrant(true);
+      else {
+        this.append({
+          kind: "error",
+          title: "Automation command",
+          body: "Use /automation grant or /automation revoke.",
+        });
+      }
+      return;
+    }
     if (command === "provider") {
       if (args[0] === "login" && args[1]) {
         await this.login(args[1]);
@@ -353,7 +393,7 @@ export class SessionController {
 
   private async refreshContext(): Promise<void> {
     const request = this.beginRequest();
-    const [status, providerResult] = await Promise.all([
+    const [status, providerResult, automationResult] = await Promise.all([
       this.engine.request(
         "status",
         this.options.repositoryPath,
@@ -368,6 +408,13 @@ export class SessionController {
         undefined,
         { signal: request.signal },
       ),
+      this.engine.request(
+        "automation",
+        this.options.repositoryPath,
+        { action: "status" },
+        undefined,
+        { signal: request.signal },
+      ),
     ]);
     this.finishRequest(request);
     const snapshot = status.repository as RepositorySnapshot;
@@ -376,6 +423,7 @@ export class SessionController {
     this.providers =
       (providerResult.providers as ProviderView[] | undefined) ?? [];
     this.activeProviderId = configuration?.review?.provider;
+    this.automation = automationResult as AutomationView;
     const selected = this.providers.find(
       (item) => item.id === this.activeProviderId,
     );
@@ -399,8 +447,209 @@ export class SessionController {
         provider: selected?.name ?? "Not configured",
         providerId: selected?.id,
         providerAvailability: selected?.availability,
+        reviewMode: this.automation.mode ?? "manual",
       },
     });
+  }
+
+  private openModes(): void {
+    const selected = this.automation.mode ?? "manual";
+    this.patch({
+      overlay: {
+        kind: "providers",
+        title: "Review cadence",
+        items: [
+          ["manual", "Manual · reviews only when requested"],
+          ["auto", "Auto · review new or changed open PRs"],
+          ["auto_plus", "Auto+ · commit, pre-push, and PR reviews"],
+        ].map(([mode, label]) => ({
+          label: `${mode === selected ? "●" : "○"} ${label}`,
+          value: mode,
+          command: `/mode set ${mode}`,
+        })),
+      },
+    });
+  }
+
+  private async configureMode(mode: string): Promise<void> {
+    await this.runBusy("Preparing review-mode change…", async () => {
+      const preview = await this.engine.request(
+        "automation",
+        this.options.repositoryPath,
+        { action: "configure", mode, write: false },
+      );
+      const hooks = (
+        (preview.hookResults as Array<Record<string, unknown>>) ?? []
+      )
+        .map((item) => `${String(item.hook)}: ${String(item.action)}`)
+        .join("\n");
+      this.requestDecision(
+        `Use ${mode === "auto_plus" ? "Auto+" : mode === "auto" ? "Auto" : "Manual"} mode?`,
+        `${mode === "manual" ? "Managed automation hooks will be removed." : "Managed post-commit and pre-push hooks will be installed where safe."}${hooks ? `\n${hooks}` : ""}`,
+        "apply mode",
+        async () => {
+          await this.runBusy("Applying review mode…", async () => {
+            const result = await this.engine.request(
+              "automation",
+              this.options.repositoryPath,
+              { action: "configure", mode, write: true },
+            );
+            await this.refreshContext();
+            this.append({
+              kind: "system",
+              title: "Review mode updated",
+              body: `${String(result.mode)} is active.${mode === "manual" ? "" : " Approve an automation grant with /automation grant before closed-session provider use."}`,
+            });
+          });
+        },
+      );
+    });
+  }
+
+  private async configureGrant(revoke: boolean): Promise<void> {
+    await this.runBusy("Inspecting automation grant…", async () => {
+      const action = revoke ? "revoke_grant" : "grant";
+      const preview = await this.engine.request(
+        "automation",
+        this.options.repositoryPath,
+        { action, write: false },
+      );
+      this.requestDecision(
+        revoke
+          ? "Revoke automation grant?"
+          : "Approve closed-session automation?",
+        revoke
+          ? "Queued remote jobs will wait until a new scoped grant is approved."
+          : `Scope: ${JSON.stringify(preview.grant)}\nThe grant contains no credentials and invalidates when provider or repository configuration changes.`,
+        revoke ? "revoke grant" : "approve scoped grant",
+        async () => {
+          await this.runBusy("Updating automation grant…", async () => {
+            const result = await this.engine.request(
+              "automation",
+              this.options.repositoryPath,
+              {
+                action,
+                write: true,
+              },
+            );
+            if (!revoke) {
+              const resumed =
+                (result.resumedJobs as Array<Record<string, unknown>>) ?? [];
+              for (const job of resumed) {
+                if (job.id) void this.runAutomationJob(String(job.id));
+              }
+            }
+            await this.refreshContext();
+            this.append({
+              kind: "system",
+              body: revoke
+                ? "Automation grant revoked."
+                : "Scoped automation grant approved.",
+            });
+          });
+        },
+      );
+    });
+  }
+
+  private appendJobs(): void {
+    const jobs = this.automation.jobs ?? [];
+    this.append({
+      kind: "status",
+      title: "Automation jobs",
+      body: jobs.length
+        ? jobs
+            .slice(0, 20)
+            .map(
+              (job) =>
+                `${String(job.status)} · ${String(job.target)} · ${String(job.revision).slice(0, 8)}${job.message ? ` · ${String(job.message)}` : ""}`,
+            )
+            .join("\n")
+        : "No automation jobs have been recorded.",
+    });
+  }
+
+  private appendAutomationUpdates(): void {
+    const notable = (this.automation.jobs ?? []).filter((job) => {
+      const id = String(job.id ?? "");
+      if (!id || this.seenJobs.has(`${id}:${String(job.status)}`)) return false;
+      const selected = [
+        "completed",
+        "failed",
+        "interrupted",
+        "waiting_for_consent",
+      ].includes(String(job.status));
+      if (selected) this.seenJobs.add(`${id}:${String(job.status)}`);
+      return selected;
+    });
+    for (const job of notable) {
+      const result = job.result as ReviewView | undefined;
+      if (job.status === "completed" && result) this.appendReview(result);
+      else {
+        this.append({
+          kind: job.status === "failed" ? "error" : "status",
+          title: `Automation · ${String(job.status)}`,
+          body: `${String(job.target)} ${String(job.revision).slice(0, 8)}${job.message ? `\n${String(job.message)}` : ""}`,
+        });
+      }
+    }
+  }
+
+  private async observeAutomationEvent(
+    event: "launch" | "refresh",
+  ): Promise<void> {
+    try {
+      const response = await this.engine.request(
+        "automation",
+        this.options.repositoryPath,
+        { action: "event", event },
+      );
+      const job = response.job as Record<string, unknown> | undefined;
+      if (job?.id && job.status === "queued" && !job.coalesced) {
+        void this.runAutomationJob(String(job.id));
+      }
+    } catch (error) {
+      if ((this.automation.mode ?? "manual") !== "manual") {
+        this.appendError(error);
+      }
+    }
+  }
+
+  private async runAutomationJob(jobId: string): Promise<void> {
+    try {
+      const response = await this.engine.request(
+        "automation",
+        this.options.repositoryPath,
+        { action: "worker", jobId },
+      );
+      const result = response.result as ReviewView | undefined;
+      const job = response.job as Record<string, unknown> | undefined;
+      if (job?.id) this.seenJobs.add(`${String(job.id)}:completed`);
+      if (result) this.appendReview(result);
+      await this.pollAutomationJobs();
+    } catch (error) {
+      this.appendError(error);
+    }
+  }
+
+  private startJobObservation(): void {
+    if (this.pollTimer) return;
+    this.pollTimer = setInterval(() => void this.pollAutomationJobs(), 4000);
+    this.pollTimer.unref();
+  }
+
+  private async pollAutomationJobs(): Promise<void> {
+    if (this.active || this.currentState.shouldExit) return;
+    try {
+      this.automation = (await this.engine.request(
+        "automation",
+        this.options.repositoryPath,
+        { action: "status" },
+      )) as AutomationView;
+      this.appendAutomationUpdates();
+    } catch {
+      // Polling remains quiet; explicit /jobs surfaces actionable failures.
+    }
   }
 
   private appendStatus(): void {

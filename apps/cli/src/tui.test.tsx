@@ -26,6 +26,7 @@ describe("SessionView", () => {
             provider: "Codex CLI",
             providerId: "codex",
             providerAvailability: "ready",
+            reviewMode: "manual",
           },
           transcript: [
             {
