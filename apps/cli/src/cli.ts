@@ -13,6 +13,12 @@ import {
   printValue,
 } from "./format.js";
 import type { EngineEvent } from "./protocol.js";
+import {
+  loginProvider,
+  ollamaPullPlan,
+  providerAuthPlan,
+  runInteractiveProviderCommand,
+} from "./provider-auth.js";
 import { App } from "./tui.js";
 
 const program = new Command();
@@ -69,6 +75,182 @@ function engineCommand(
 engineCommand("status", "show repository status and detected project context");
 engineCommand("doctor", "check the local CodePreFlight environment");
 engineCommand("providers", "show detected AI providers");
+
+const provider = program
+  .command("provider")
+  .description("configure and verify AI providers");
+
+provider
+  .command("list")
+  .description(
+    "show provider installation, authentication, model, and readiness",
+  )
+  .option("--json", "print machine-readable JSON")
+  .action(async (options: { json?: boolean }) => {
+    try {
+      const result = await client.request("provider", resolve(process.cwd()), {
+        action: "list",
+      });
+      printValue(result, Boolean(options.json));
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exitCode = 2;
+    }
+  });
+
+provider
+  .command("login <provider>")
+  .description("launch the provider-owned interactive authentication flow")
+  .option("--yes", "approve launching the provider CLI")
+  .action(async (providerId: string, options: { yes?: boolean }) => {
+    try {
+      const plan = providerAuthPlan(providerId);
+      if (plan.warning) process.stderr.write(`${plan.warning}\n`);
+      let approved = Boolean(options.yes);
+      if (!approved && process.stdin.isTTY && process.stdout.isTTY) {
+        const prompt = createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        const answer = await prompt.question(
+          `Launch ${plan.command} ${plan.args.join(" ")} using the provider-owned login flow? [y/N] `,
+        );
+        prompt.close();
+        approved = answer.trim().toLowerCase() === "y";
+      }
+      if (!approved) {
+        process.stderr.write("Provider login was not launched.\n");
+        process.exitCode = 3;
+        return;
+      }
+      await loginProvider(providerId);
+      const result = await client.request("provider", resolve(process.cwd()), {
+        action: "list",
+      });
+      printValue(result, false);
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exitCode = 2;
+    }
+  });
+
+provider
+  .command("models <provider>")
+  .description("list models discoverable through a provider CLI")
+  .option("--json", "print machine-readable JSON")
+  .action(async (providerId: string, options: { json?: boolean }) => {
+    try {
+      const result = await client.request("provider", resolve(process.cwd()), {
+        action: "models",
+        provider: providerId,
+      });
+      printValue(result, Boolean(options.json));
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exitCode = 2;
+    }
+  });
+
+provider
+  .command("test <provider>")
+  .description("run a synthetic review without sending repository content")
+  .option("--yes", "approve consuming provider usage for the smoke test")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (providerId: string, options: { yes?: boolean; json?: boolean }) => {
+      if (!options.yes) {
+        process.stderr.write(
+          "A provider smoke test may consume provider usage; rerun with --yes.\n",
+        );
+        process.exitCode = 3;
+        return;
+      }
+      try {
+        const result = await client.request(
+          "provider",
+          resolve(process.cwd()),
+          { action: "test", provider: providerId },
+        );
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(
+          `${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exitCode = 2;
+      }
+    },
+  );
+
+provider
+  .command("use <provider>")
+  .description("preview or save a non-secret default provider and model")
+  .option("--model <model>", "select a provider model")
+  .option(
+    "--global",
+    "write the XDG user configuration instead of repository configuration",
+  )
+  .option("--write", "apply the previewed configuration")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (
+      providerId: string,
+      options: {
+        model?: string;
+        global?: boolean;
+        write?: boolean;
+        json?: boolean;
+      },
+    ) => {
+      try {
+        const result = await client.request(
+          "provider",
+          resolve(process.cwd()),
+          {
+            action: "configure",
+            provider: providerId,
+            model: options.model,
+            global: Boolean(options.global),
+            write: Boolean(options.write),
+          },
+        );
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(
+          `${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exitCode = 2;
+      }
+    },
+  );
+
+provider
+  .command("pull <model>")
+  .description("download an Ollama model through the official Ollama CLI")
+  .option("--yes", "approve downloading the model")
+  .action(async (model: string, options: { yes?: boolean }) => {
+    try {
+      const plan = ollamaPullPlan(model);
+      if (!options.yes) {
+        process.stderr.write(
+          `Model download requires confirmation; rerun with --yes to launch ${plan.command} ${plan.args.join(" ")}.\n`,
+        );
+        process.exitCode = 3;
+        return;
+      }
+      await runInteractiveProviderCommand(plan);
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exitCode = 2;
+    }
+  });
 
 program
   .command("init")

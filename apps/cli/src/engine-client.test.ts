@@ -71,7 +71,7 @@ describe("EngineClient process protocol", () => {
       `#!/usr/bin/env node
 import { rmSync, writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(marker)}, "active");
-process.stdout.write(JSON.stringify({protocolVersion:1,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.stdout.write(JSON.stringify({protocolVersion:2,requestId:"",event:"ready",payload:{}}) + "\\n");
 process.on("SIGTERM", () => { rmSync(${JSON.stringify(marker)}, {force:true}); process.exit(0); });
 process.stdin.resume();
 `,
@@ -130,10 +130,10 @@ process.stdin.resume();
     writeFileSync(
       engine,
       `#!/usr/bin/env node
-process.stdout.write(JSON.stringify({protocolVersion:1,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.stdout.write(JSON.stringify({protocolVersion:2,requestId:"",event:"ready",payload:{}}) + "\\n");
 process.stdin.on("data", chunk => {
   const request = JSON.parse(chunk.toString());
-  process.stdout.write(JSON.stringify({protocolVersion:1,requestId:request.requestId,event:"error",error:{code:"provider_model_missing",message:"Model missing",recoverable:true,details:{actions:[{type:"pull_ollama_model",provider:"ollama",model:"qwen2.5-coder:7b"}]}}}) + "\\n");
+  process.stdout.write(JSON.stringify({protocolVersion:2,requestId:request.requestId,event:"error",error:{code:"provider_model_missing",message:"Model missing",recoverable:true,details:{actions:[{type:"pull_ollama_model",provider:"ollama",model:"qwen2.5-coder:7b"}]}}}) + "\\n");
 });
 `,
     );

@@ -23,6 +23,7 @@ from .local_log import log_operation
 from .models import EngineEvent, EngineFailure, EngineRequest
 from .panel import PanelReviewer
 from .protocol_generated import ENGINE_COMMANDS, PROTOCOL_VERSION
+from .provider_setup import configure_provider, provider_models
 from .providers import discover_providers
 from .pull_request import prepare_pull_request
 from .repository import RepositoryInspector
@@ -59,9 +60,11 @@ def dispatch(request: EngineRequest) -> None:
             complete(request.requestId, cache.clear())
             return
         raise CodePreflightError("invalid_cache_action", "Cache action must be status or clear")
-    if request.command == "providers":
-        config = load_config(path)
-        if request.payload.get("action") == "test":
+    if request.command in {"provider", "providers"}:
+        provider_root = Path(RepositoryInspector().inspect(path).root)
+        config = load_config(provider_root)
+        action = str(request.payload.get("action", "list"))
+        if action == "test":
             provider_id = str(request.payload.get("provider", ""))
             if not provider_id:
                 raise CodePreflightError(
@@ -72,6 +75,26 @@ def dispatch(request: EngineRequest) -> None:
                 ProviderRegistry(config).smoke_test(provider_id),
             )
             return
+        if action == "models":
+            complete(request.requestId, provider_models(str(request.payload.get("provider", ""))))
+            return
+        if action == "configure":
+            complete(
+                request.requestId,
+                configure_provider(
+                    provider_root,
+                    provider_id=str(request.payload.get("provider", "")),
+                    model=(str(request.payload["model"]) if request.payload.get("model") else None),
+                    global_scope=bool(request.payload.get("global", False)),
+                    write=bool(request.payload.get("write", False)),
+                ),
+            )
+            return
+        if action != "list":
+            raise CodePreflightError(
+                "invalid_provider_action",
+                "Provider action must be list, models, test, or configure",
+            )
         complete(
             request.requestId,
             {
