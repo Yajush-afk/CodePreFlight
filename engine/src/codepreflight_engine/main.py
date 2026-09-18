@@ -133,7 +133,11 @@ def dispatch(request: EngineRequest) -> None:
         return
     if request.command == "explain":
         snapshot = RepositoryInspector().inspect(path)
-        result = RepositoryIntelligence().run(Path(snapshot.root), request.payload)
+        result = RepositoryIntelligence().run(
+            Path(snapshot.root),
+            request.payload,
+            lambda event, payload: request_event(request.requestId, event, payload),
+        )
         complete(request.requestId, result)
         return
     if request.command == "init":

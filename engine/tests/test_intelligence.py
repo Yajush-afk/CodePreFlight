@@ -58,6 +58,16 @@ class HistoryAdapter:
         )
 
 
+class RemoteExplanationAdapter(ExplanationAdapter):
+    descriptor = ProviderDescriptor(
+        id="remote-fake",
+        name="Remote fake",
+        kind=ProviderKind.SUBSCRIPTION_CLI,
+        state=ProviderState.READY,
+        sends_code_remotely=True,
+    )
+
+
 def test_diff_explanation_verifies_evidence(
     git_repository: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -164,3 +174,27 @@ def test_history_rejects_commit_unrelated_to_cited_file(
         RepositoryIntelligence().run(
             git_repository, {"mode": "history", "path": "feature.py", "provider": "fake"}
         )
+
+
+def test_remote_question_discloses_context_before_requesting_consent(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (git_repository / "feature.py").write_text("value = True\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    registry = SimpleNamespace(adapter=lambda provider_id: RemoteExplanationAdapter())
+    monkeypatch.setattr(
+        "codepreflight_engine.intelligence.ProviderRegistry", lambda config: registry
+    )
+    monkeypatch.setattr("codepreflight_engine.intelligence.is_trusted", lambda root: True)
+    events: list[tuple[str, dict[str, object]]] = []
+
+    with pytest.raises(CodePreflightError) as error:
+        RepositoryIntelligence().run(
+            git_repository,
+            {"mode": "ask", "question": "What changed?", "provider": "remote-fake"},
+            lambda event, payload: events.append((event, payload)),
+        )
+
+    assert error.value.code == "provider_consent_required"
+    assert events[0][0] == "consent_required"
+    assert events[0][1]["manifest"]["total_characters"] > 0  # type: ignore[index]
