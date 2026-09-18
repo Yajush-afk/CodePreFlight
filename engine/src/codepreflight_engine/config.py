@@ -43,6 +43,11 @@ class CacheSettings(ConfigModel):
     enabled: bool | None = None
 
 
+class ScanSettings(ConfigModel):
+    batch_characters: int | None = Field(default=None, ge=4_000, le=500_000)
+    max_file_bytes: int | None = Field(default=None, ge=1_000, le=5_000_000)
+
+
 class GitSettings(ConfigModel):
     base_branch: str | None = None
 
@@ -56,6 +61,7 @@ class CodePreflightConfig(ConfigModel):
     rules: list[str] | None = None
     hooks: HookSettings | None = None
     cache: CacheSettings | None = None
+    scan: ScanSettings | None = None
     git: GitSettings | None = None
     base_branch: str | None = None
 
