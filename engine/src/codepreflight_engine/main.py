@@ -30,6 +30,7 @@ from .providers import discover_providers
 from .pull_request import prepare_pull_request
 from .repository import RepositoryInspector
 from .review import ReviewOrchestrator
+from .scan import FullScanOrchestrator
 from .trust import is_trusted
 from .workspace import RepositoryWorkspace
 
@@ -217,6 +218,18 @@ def dispatch(request: EngineRequest) -> None:
         )
     if request.command == "workspace":
         complete(request.requestId, RepositoryWorkspace().run(path, request.payload))
+        return
+    if request.command == "scan":
+        snapshot = RepositoryInspector().inspect(path)
+        action = str(request.payload.get("action", "full"))
+        if action != "full":
+            raise CodePreflightError("invalid_scan_action", "Scan action must be full")
+        result = FullScanOrchestrator().scan(
+            Path(snapshot.root),
+            request.payload,
+            lambda event, payload: request_event(request.requestId, event, payload),
+        )
+        complete(request.requestId, result)
         return
     if request.command == "git_action":
         complete(request.requestId, GitActions().run(path, request.payload))

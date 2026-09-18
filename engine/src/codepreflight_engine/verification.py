@@ -75,7 +75,7 @@ class FindingVerifier:
             successes += 1
             checks += 1
             staged_lines = changed_lines.get(normalized_path, set())
-            if any(
+            if target == "full" or any(
                 line in staged_lines for line in range(evidence.start_line, evidence.end_line + 1)
             ):
                 successes += 1
@@ -131,6 +131,8 @@ class FindingVerifier:
     def _changed_lines(
         self, root: Path, target: str, base_revision: str | None, revision: str | None
     ) -> dict[str, set[int]]:
+        if target == "full":
+            return {}
         if target == "staged":
             args = ["diff", "--cached"]
         elif target == "commit" and base_revision == "<root>":

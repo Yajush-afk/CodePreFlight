@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import React from "react";
 import { render } from "ink";
-import { EngineClient } from "./engine-client.js";
+import { EngineClient, EngineRequestError } from "./engine-client.js";
 import {
   printExplanation,
   printPanel,
@@ -44,6 +44,18 @@ function printProviderDisclosure(event: EngineEvent): void {
   );
 }
 
+function printFullScanManifest(event: EngineEvent): void {
+  if (event.event !== "consent_required" || !event.payload?.fullScan) return;
+  const manifest = event.payload.manifest as Record<string, unknown>;
+  process.stderr.write(
+    `Full scan manifest: ${String(manifest.eligibleFiles)} eligible; ` +
+      `${String(manifest.excludedFiles)} excluded; ${String(manifest.redactions)} redactions; ` +
+      `${String(manifest.totalSelectedCharacters)} selected characters; ` +
+      `${String(manifest.providerRequests)} planned provider requests; ` +
+      `destination ${String(manifest.destination)} (${String(manifest.privacyCategory)}).\n`,
+  );
+}
+
 program
   .name("preflight")
   .description(
@@ -76,6 +88,55 @@ function engineCommand(
 engineCommand("status", "show repository status and detected project context");
 engineCommand("doctor", "check the local CodePreFlight environment");
 engineCommand("providers", "show detected AI providers");
+
+const scan = program
+  .command("scan")
+  .description("run guarded repository scans");
+scan
+  .command("full")
+  .description("scan a clean synchronized configured base branch")
+  .option("--provider <provider>", "override the configured provider")
+  .option("--yes", "approve this full scan after reviewing its manifest")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (options: { provider?: string; yes?: boolean; json?: boolean }) => {
+      try {
+        const result = await client.request(
+          "scan",
+          resolve(process.cwd()),
+          {
+            action: "full",
+            provider: options.provider,
+            fullScanApproved: Boolean(options.yes),
+          },
+          (event) => {
+            printFullScanManifest(event);
+            if (!options.json && event.event === "scan_progress") {
+              process.stderr.write(
+                `${String(event.payload?.message ?? "Scanning")}\n`,
+              );
+            }
+          },
+        );
+        if (options.json) printValue(result, true);
+        else printReview(result);
+      } catch (error) {
+        process.stderr.write(
+          `${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        if (
+          !options.yes &&
+          error instanceof EngineRequestError &&
+          error.code === "full_scan_confirmation_required"
+        ) {
+          process.stderr.write(
+            "Rerun with --yes only after reviewing the full-scan manifest.\n",
+          );
+        }
+        process.exitCode = 2;
+      }
+    },
+  );
 
 const automation = program
   .command("automation")

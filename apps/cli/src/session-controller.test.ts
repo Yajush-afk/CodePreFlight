@@ -106,6 +106,37 @@ class FakeEngine implements SessionEngine {
       }
       return { branch: payload.branch };
     }
+    if (command === "scan") {
+      if (!payload.fullScanApproved) {
+        onEvent?.({
+          protocolVersion: 2,
+          requestId: "scan",
+          event: "consent_required",
+          payload: {
+            fullScan: true,
+            manifest: {
+              eligibleFiles: 12,
+              excludedFiles: 3,
+              redactions: 1,
+              totalSelectedCharacters: 24000,
+              providerRequests: 4,
+              destination: "Codex CLI",
+              privacyCategory: "subscription_cli",
+            },
+          },
+        });
+        throw new EngineRequestError(
+          "Full scan confirmation required",
+          "full_scan_confirmation_required",
+          true,
+        );
+      }
+      return {
+        status: "completed",
+        summary: "Full scan complete.",
+        findings: [],
+      };
+    }
     if (command === "review") {
       if (!payload.remoteApproved) {
         onEvent?.({
@@ -342,5 +373,31 @@ describe("SessionController", () => {
       command: "automation",
       payload: { action: "configure", mode: "auto_plus", write: true },
     });
+  });
+
+  it("requires a dedicated confirmation for every full scan", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/scan full");
+    const decision = controller.state.pendingDecision;
+    expect(decision?.body).toContain("12 eligible files");
+    expect(decision?.body).toContain(
+      "This approval is only for this full scan",
+    );
+
+    await controller.confirm(decision!.id, true);
+
+    expect(engine.requests.at(-1)).toMatchObject({
+      command: "scan",
+      payload: { fullScanApproved: true },
+    });
+    expect(controller.state.transcript.at(-1)?.body).toContain(
+      "Full scan complete.",
+    );
   });
 });

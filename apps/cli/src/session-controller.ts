@@ -142,6 +142,7 @@ const HELP = [
   "/mode — choose Manual, Auto, or Auto+ review cadence",
   "/jobs — inspect background review jobs",
   "/automation grant|revoke — manage closed-session provider approval",
+  "/scan full — scan a clean synchronized configured base branch",
   "/provider — inspect provider readiness",
   "/provider login <id> — launch provider-owned authentication",
   "/provider use <id> [model] — preview and select a provider",
@@ -177,6 +178,7 @@ export class SessionController {
     characters: number;
     redactions: number;
   };
+  private fullScanManifest?: Record<string, unknown>;
   private pollTimer?: NodeJS.Timeout;
   private readonly seenJobs = new Set<string>();
 
@@ -367,6 +369,10 @@ export class SessionController {
           body: "Use /automation grant or /automation revoke.",
         });
       }
+      return;
+    }
+    if (command === "scan" && args[0] === "full") {
+      await this.fullScan(false);
       return;
     }
     if (command === "provider") {
@@ -830,6 +836,57 @@ export class SessionController {
     });
   }
 
+  private async fullScan(approved: boolean): Promise<void> {
+    if (!this.activeProviderId) {
+      this.append({
+        kind: "error",
+        title: "Select a review provider",
+        body: "A full scan requires a ready provider. Use /provider first.",
+      });
+      return;
+    }
+    await this.runBusy("Preparing guarded full scan…", async () => {
+      if (!approved) this.fullScanManifest = undefined;
+      const request = this.beginRequest();
+      try {
+        try {
+          const result = await this.engine.request(
+            "scan",
+            this.options.repositoryPath,
+            {
+              action: "full",
+              provider: this.activeProviderId,
+              fullScanApproved: approved,
+            },
+            (event) => this.handleEngineEvent(event),
+            { signal: request.signal },
+          );
+          this.lastReview = result as ReviewView;
+          this.appendReview(this.lastReview);
+        } catch (error) {
+          if (
+            !approved &&
+            error instanceof EngineRequestError &&
+            error.code === "full_scan_confirmation_required" &&
+            this.fullScanManifest
+          ) {
+            const manifest = this.fullScanManifest;
+            this.requestDecision(
+              "Run this full repository scan?",
+              `${String(manifest.eligibleFiles)} eligible files · ${String(manifest.excludedFiles)} excluded · ${String(manifest.redactions)} redactions\n${Number(manifest.totalSelectedCharacters ?? 0).toLocaleString()} selected characters · ${String(manifest.providerRequests)} provider requests\nDestination: ${String(manifest.destination)} (${String(manifest.privacyCategory)})\nThis approval is only for this full scan.`,
+              "approve full scan",
+              async () => this.fullScan(true),
+            );
+            return;
+          }
+          throw error;
+        }
+      } finally {
+        this.finishRequest(request);
+      }
+    });
+  }
+
   private async login(provider: string): Promise<void> {
     if (!this.options.loginProvider) {
       this.append({
@@ -1031,7 +1088,17 @@ export class SessionController {
     if (event.event === "progress") {
       this.patch({ activity: String(event.payload?.message ?? "Working…") });
     }
+    if (event.event === "scan_progress") {
+      this.patch({ activity: String(event.payload?.message ?? "Scanning…") });
+    }
     if (event.event === "consent_required") {
+      if (event.payload?.fullScan) {
+        this.fullScanManifest = event.payload.manifest as Record<
+          string,
+          unknown
+        >;
+        return;
+      }
       const provider = event.payload?.provider as
         { id?: string; name?: string; kind?: string } | undefined;
       const manifest = event.payload?.manifest as
