@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from .adapters import ProviderRegistry
+from .automation import AutomationManager
 from .cache import ReviewCache
 from .commit import create_commit, prepare_commit
 from .config import load_config
@@ -48,6 +49,172 @@ def request_event(request_id: str, event: str, payload: dict[str, Any]) -> None:
 
 def dispatch(request: EngineRequest) -> None:
     path = Path(request.repositoryPath).resolve()
+    if request.command == "automation":
+        snapshot = RepositoryInspector().inspect(path)
+        root = Path(snapshot.root)
+        manager = AutomationManager(root)
+        action = str(request.payload.get("action", "status"))
+        if action == "status":
+            complete(request.requestId, manager.status())
+            return
+        if action == "configure":
+            mode = str(request.payload.get("mode", "manual"))
+            write = bool(request.payload.get("write", False))
+            result = manager.configure(mode, write=write)
+            hook_manager = HookManager(root)
+            hooks = []
+            for hook in ("post-commit", "pre-push"):
+                hooks.append(
+                    hook_manager.install(hook, write=write)
+                    if mode != "manual"
+                    else hook_manager.remove(hook, write=write)
+                )
+            complete(request.requestId, {**result, "hookResults": hooks})
+            return
+        if action == "grant":
+            scope = manager.current_scope()
+            complete(
+                request.requestId,
+                manager.grant(scope, write=bool(request.payload.get("write", False))),
+            )
+            return
+        if action == "revoke_grant":
+            complete(
+                request.requestId,
+                manager.revoke_grant(write=bool(request.payload.get("write", False))),
+            )
+            return
+        if action == "event":
+            event_result = manager.event(
+                str(request.payload.get("event", "refresh")),
+                manager.current_scope() if manager.mode() != "manual" else None,
+            )
+            event_action = event_result.get("action")
+            if event_action == "detect_pr":
+                try:
+                    pr = RepositoryWorkspace().run(root, {"action": "pr"})
+                except CodePreflightError as error:
+                    complete(
+                        request.requestId,
+                        {
+                            **event_result,
+                            "prDetection": {
+                                "available": False,
+                                "code": error.code,
+                                "message": str(error),
+                            },
+                        },
+                    )
+                    return
+                if pr.get("found"):
+                    job = manager.enqueue(
+                        "pull_request",
+                        str(pr["localHead"]),
+                        manager.current_scope(),
+                        metadata={"base": pr.get("baseBranch"), "url": pr.get("url")},
+                    )
+                    event_result = {**event_result, "job": job}
+                complete(request.requestId, {**event_result, "prDetection": pr})
+                return
+            if event_action == "review_branch":
+                scope = manager.current_scope()
+                grant = manager.grant_status(scope)
+                if not grant["valid"]:
+                    complete(
+                        request.requestId,
+                        {**event_result, "waitingForConsent": True, "grant": grant},
+                    )
+                    return
+                review_result = ReviewOrchestrator().review(
+                    root,
+                    {
+                        "target": "branch",
+                        "provider": scope["provider"],
+                        "remoteApproved": True,
+                        "hook": True,
+                    },
+                    lambda event, payload: request_event(request.requestId, event, payload),
+                )
+                pr_job = None
+                try:
+                    pr = RepositoryWorkspace().run(root, {"action": "pr"})
+                    if pr.get("found"):
+                        pr_job = manager.enqueue(
+                            "pull_request",
+                            str(pr["localHead"]),
+                            scope,
+                            metadata={"base": pr.get("baseBranch"), "url": pr.get("url")},
+                        )
+                except CodePreflightError:
+                    pass
+                complete(
+                    request.requestId,
+                    {
+                        **event_result,
+                        "review": review_result.model_dump(mode="json"),
+                        "blocking": review_result.blocking,
+                        "job": pr_job,
+                    },
+                )
+                return
+            complete(request.requestId, event_result)
+            return
+        if action == "worker":
+            job_id = str(request.payload.get("jobId", ""))
+            job = manager.job(job_id)
+            if not manager.claim_job(job_id):
+                complete(request.requestId, {"job": job, "coalesced": True})
+                return
+            try:
+                scope = manager.current_scope()
+                grant = manager.grant_status(scope)
+                if not grant["valid"]:
+                    waiting = manager.update_job(
+                        job_id,
+                        "waiting_for_consent",
+                        message=(
+                            "Automation grant is missing or no longer matches provider settings"
+                        ),
+                    )
+                    request_event(request.requestId, "job_update", {"job": waiting})
+                    complete(request.requestId, waiting)
+                    return
+                running = manager.update_job(job_id, "running")
+                request_event(request.requestId, "job_update", {"job": running})
+                metadata = job.get("metadata", {})
+                review_payload: dict[str, Any] = {
+                    "target": job["target"],
+                    "revision": job["revision"] if job["target"] == "commit" else None,
+                    "base": metadata.get("base"),
+                    "provider": scope["provider"],
+                    "remoteApproved": True,
+                    "hook": True,
+                }
+                review_result = ReviewOrchestrator().review(
+                    root,
+                    review_payload,
+                    lambda event, payload: request_event(request.requestId, event, payload),
+                )
+                completed = manager.update_job(
+                    job_id,
+                    "completed",
+                    result=review_result.model_dump(mode="json"),
+                )
+                request_event(request.requestId, "job_update", {"job": completed})
+                complete(
+                    request.requestId,
+                    {"job": completed, "result": review_result.model_dump(mode="json")},
+                )
+            except Exception as error:
+                manager.update_job(job_id, "failed", message=str(error))
+                raise
+            finally:
+                manager.release_job(job_id)
+            return
+        raise CodePreflightError(
+            "invalid_automation_action",
+            "Automation action must be status, configure, grant, revoke_grant, event, or worker",
+        )
     if request.command == "workspace":
         complete(request.requestId, RepositoryWorkspace().run(path, request.payload))
         return
@@ -115,7 +282,7 @@ def dispatch(request: EngineRequest) -> None:
     if request.command == "commit":
         snapshot = RepositoryInspector().inspect(path)
         root = Path(snapshot.root)
-        action = request.payload.get("action")
+        action = str(request.payload.get("action", ""))
         if action == "prepare":
             preparation = prepare_commit(
                 root,

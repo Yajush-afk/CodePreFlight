@@ -11,7 +11,7 @@ from .config import load_config
 from .errors import CodePreflightError
 from .git import GitRunner
 
-SUPPORTED_HOOKS = {"pre-commit", "pre-push"}
+SUPPORTED_HOOKS = {"post-commit", "pre-commit", "pre-push"}
 START = "# >>> CodePreFlight managed block >>>"
 END = "# <<< CodePreFlight managed block <<<"
 BLOCK_PATTERN = re.compile(rf"\n?{re.escape(START)}.*?{re.escape(END)}\n?", re.DOTALL)
@@ -132,6 +132,35 @@ class HookManager:
         }
 
     def _block(self, hook: str) -> str:
+        if hook == "post-commit":
+            return "\n".join(
+                [
+                    START,
+                    'disabled_file="$(git rev-parse --git-path '
+                    f'codepreflight/hooks/{hook}.disabled)"',
+                    'if [ "${PREFLIGHT_BYPASS:-0}" != "1" ] && [ ! -f "$disabled_file" ]; then',
+                    "  (preflight automation event post-commit >/dev/null 2>&1 &) || true",
+                    "fi",
+                    END,
+                ]
+            )
+        if hook == "pre-push":
+            return "\n".join(
+                [
+                    START,
+                    'disabled_file="$(git rev-parse --git-path '
+                    f'codepreflight/hooks/{hook}.disabled)"',
+                    'if [ "${PREFLIGHT_BYPASS:-0}" != "1" ] && [ ! -f "$disabled_file" ]; then',
+                    "  preflight automation event pre-push || codepreflight_status=$?",
+                    '  if [ "${codepreflight_status:-0}" -eq 1 ]; then exit 1; fi',
+                    '  if [ "${codepreflight_status:-0}" -gt 1 ]; then',
+                    '    echo "CodePreFlight automation failed operationally; '
+                    'continuing (fail-open)." >&2',
+                    "  fi",
+                    "fi",
+                    END,
+                ]
+            )
         review_args = "--staged" if hook == "pre-commit" else "--branch"
         fail_closed = bool(load_config(self.root).get("hooks", {}).get("fail_closed", False))
         failure_action = (
