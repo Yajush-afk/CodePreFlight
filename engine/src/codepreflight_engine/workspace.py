@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .automation import AutomationManager
 from .errors import CodePreflightError
 from .git import GitRunner
 from .repository import RepositoryInspector
@@ -239,6 +240,12 @@ class RepositoryWorkspace:
         if not candidates:
             return {"found": False, "branch": snapshot.branch, "localHead": local_head}
         candidate = candidates[0]
+        review_current = any(
+            job.get("target") == "pull_request"
+            and job.get("revision") == local_head
+            and job.get("status") == "completed"
+            for job in AutomationManager(root).status().get("jobs", [])
+        )
         return {
             "found": True,
             "number": candidate["number"],
@@ -248,4 +255,5 @@ class RepositoryWorkspace:
             "remoteHead": candidate["headRefOid"],
             "localHead": local_head,
             "localHeadMatches": candidate["headRefOid"] == local_head,
+            "reviewFingerprintCurrent": review_current,
         }

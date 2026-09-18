@@ -145,27 +145,18 @@ export function SessionView({
             <Text color={colorEnabled && header.conflicts ? "red" : undefined}>
               !{header.conflicts} conflicts
             </Text>
-            {!narrow && (
-              <>
-                {"  "}
-                <Text>
-                  provider <Text bold>{header.provider}</Text> [
-                  {header.providerAvailability ?? "unknown"}]
-                </Text>
-                {"  "}
-                <Text>
-                  mode <Text bold>{header.reviewMode.replace("_", "+")}</Text>
-                </Text>
-              </>
-            )}
           </Text>
-          {narrow && (
-            <Text>
-              provider <Text bold>{header.provider}</Text> [
-              {header.providerAvailability ?? "unknown"}] · mode{" "}
-              {header.reviewMode.replace("_", "+")}
-            </Text>
-          )}
+          <Text>
+            provider <Text bold>{header.provider}</Text> [
+            {header.providerAvailability ?? "unknown"}] · auth{" "}
+            {header.providerAuthentication ?? "unknown"} · model{" "}
+            {header.providerModel ?? "not applicable"}
+          </Text>
+          <Text>
+            privacy {header.providerPrivacy ?? "unknown"} · mode{" "}
+            <Text bold>{header.reviewMode.replace("_", "+")}</Text> · PR{" "}
+            {header.pullRequest ?? "not checked"}
+          </Text>
         </Box>
       ) : (
         <Box marginTop={1}>

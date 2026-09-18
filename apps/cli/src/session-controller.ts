@@ -32,6 +32,10 @@ export interface SessionHeader {
   provider: string;
   providerId?: string;
   providerAvailability?: string;
+  providerAuthentication?: string;
+  providerModel?: string;
+  providerPrivacy?: string;
+  pullRequest?: string;
   reviewMode: string;
 }
 
@@ -106,6 +110,7 @@ interface ProviderView {
   model_name?: string | null;
   sends_code_remotely?: boolean;
   detail?: string;
+  kind?: string;
 }
 
 interface ReviewFinding {
@@ -480,6 +485,18 @@ export class SessionController {
         provider: selected?.name ?? "Not configured",
         providerId: selected?.id,
         providerAvailability: selected?.availability,
+        providerAuthentication: selected?.authentication,
+        providerModel:
+          selected?.model_name ??
+          (selected?.model === "not_applicable"
+            ? "provider default"
+            : (selected?.model ?? "unknown")),
+        providerPrivacy: selected
+          ? selected.sends_code_remotely
+            ? `remote ${selected.kind ?? "provider"}`
+            : "local"
+          : "not configured",
+        pullRequest: "not checked",
         reviewMode: this.automation.mode ?? "manual",
       },
     });
@@ -638,6 +655,18 @@ export class SessionController {
         { action: "event", event },
       );
       const job = response.job as Record<string, unknown> | undefined;
+      const pr = response.prDetection as Record<string, unknown> | undefined;
+      if (pr && this.currentState.header) {
+        const pullRequest =
+          pr.available === false
+            ? `unavailable · ${String(pr.code ?? "configuration")}`
+            : pr.found
+              ? `#${String(pr.number)} · ${pr.reviewFingerprintCurrent ? "review current" : "review due"}`
+              : "none";
+        this.patch({
+          header: { ...this.currentState.header, pullRequest },
+        });
+      }
       if (job?.id && job.status === "queued" && !job.coalesced) {
         void this.runAutomationJob(String(job.id));
       }
