@@ -36,6 +36,7 @@ export class EngineRequestError extends Error {
     message: string,
     readonly code = "engine_error",
     readonly recoverable = false,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "EngineRequestError";
@@ -231,6 +232,7 @@ class EngineConnection {
           event.error?.message ?? "Engine request failed",
           event.error?.code,
           event.error?.recoverable,
+          event.error?.details,
         ),
       );
     } else if (event.event === "complete") {
