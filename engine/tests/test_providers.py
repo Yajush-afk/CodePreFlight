@@ -97,9 +97,7 @@ def test_opencode_without_any_credentials_requires_authentication(
 
     monkeypatch.setattr(providers, "_run", run)
 
-    descriptor = next(
-        item for item in providers.discover_providers({}) if item.id == "opencode"
-    )
+    descriptor = next(item for item in providers.discover_providers({}) if item.id == "opencode")
 
     assert descriptor.authentication == AuthenticationState.REQUIRED
     assert descriptor.availability == ProviderAvailability.DEGRADED

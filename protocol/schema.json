@@ -11,9 +11,9 @@
       "type": "object",
       "required": ["protocolVersion", "requestId", "command", "repositoryPath", "payload"],
       "properties": {
-        "protocolVersion": { "const": 1 },
+        "protocolVersion": { "const": 2 },
         "requestId": { "type": "string", "minLength": 1 },
-        "command": { "enum": ["cache", "commit", "doctor", "explain", "hooks", "init", "panel_review", "pr_prepare", "providers", "review", "status"] },
+        "command": { "enum": ["automation", "cache", "commit", "doctor", "explain", "git_action", "hooks", "init", "panel_review", "pr_prepare", "provider", "providers", "review", "scan", "status", "workspace"] },
         "repositoryPath": { "type": "string", "minLength": 1 },
         "payload": { "type": "object" }
       },
@@ -23,9 +23,9 @@
       "type": "object",
       "required": ["protocolVersion", "requestId", "event"],
       "properties": {
-        "protocolVersion": { "const": 1 },
+        "protocolVersion": { "const": 2 },
         "requestId": { "type": "string" },
-        "event": { "enum": ["ready", "progress", "consent_required", "provider_delta", "finding", "complete", "error"] },
+        "event": { "enum": ["ready", "progress", "consent_required", "provider_delta", "finding", "job_update", "recovery_required", "scan_progress", "complete", "error"] },
         "payload": { "type": "object" },
         "error": {
           "type": "object",

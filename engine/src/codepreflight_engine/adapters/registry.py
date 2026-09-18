@@ -66,6 +66,17 @@ class ProviderRegistry:
 
     def smoke_test(self, provider_id: str) -> dict[str, object]:
         adapter = self.adapter(provider_id)
+        if adapter.descriptor.availability != ProviderAvailability.READY:
+            raise CodePreflightError(
+                "provider_unavailable",
+                f"Provider {adapter.descriptor.name} is not ready: "
+                f"{adapter.descriptor.detail or adapter.descriptor.availability.value}",
+                recoverable=True,
+                details={
+                    "provider": adapter.descriptor.model_dump(mode="json"),
+                    "actions": [{"type": "select_provider"}],
+                },
+            )
         output = adapter.review(
             "Review this synthetic empty change. Return summary 'Provider ready.' and no "
             "findings. Return only schema-valid JSON.",

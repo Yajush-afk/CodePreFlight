@@ -6,7 +6,7 @@ describe("parseEngineEvent", () => {
     expect(
       parseEngineEvent(
         JSON.stringify({
-          protocolVersion: 1,
+          protocolVersion: 2,
           requestId: "r1",
           event: "complete",
           payload: {},
@@ -18,7 +18,7 @@ describe("parseEngineEvent", () => {
   it("rejects incompatible versions", () => {
     expect(() =>
       parseEngineEvent(
-        JSON.stringify({ protocolVersion: 2, requestId: "r1", event: "ready" }),
+        JSON.stringify({ protocolVersion: 1, requestId: "r1", event: "ready" }),
       ),
     ).toThrow(EngineProtocolError);
   });
@@ -27,7 +27,7 @@ describe("parseEngineEvent", () => {
     expect(() =>
       parseEngineEvent(
         JSON.stringify({
-          protocolVersion: 1,
+          protocolVersion: 2,
           requestId: "r1",
           event: "surprise",
         }),
