@@ -189,9 +189,15 @@ class FullScanOrchestrator:
         result = {
             "status": "completed",
             "summary": summary,
+            "provider": provider.model_dump(mode="json"),
             "findings": [finding.model_dump(mode="json") for finding in findings],
             "rejectedFindings": rejected,
+            "rejected_findings": rejected,
+            "blocking": False,
             "checks": [check.model_dump(mode="json") for check in checks],
+            "context": {
+                "checks": [check.model_dump(mode="json") for check in checks],
+            },
             "manifest": manifest,
             "fingerprint": fingerprint,
             "resumedBatches": reused,

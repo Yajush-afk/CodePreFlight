@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Box, Text, useApp, useInput, useStdin } from "ink";
+import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import SelectInput from "ink-select-input";
 import { loginProvider } from "./provider-auth.js";
@@ -19,6 +19,9 @@ interface SessionViewProps {
   input: string;
   onInput: (value: string) => void;
   onSubmit: (value: string) => void;
+  terminalWidth?: number;
+  terminalHeight?: number;
+  colorEnabled?: boolean;
 }
 
 const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
@@ -30,20 +33,23 @@ const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
 
 function TranscriptItem({
   entry,
+  colorEnabled,
 }: {
   entry: TranscriptEntry;
+  colorEnabled: boolean;
 }): React.JSX.Element {
   if (entry.kind === "user") {
     return (
       <Box marginTop={1}>
-        <Text color="cyan" bold>
+        <Text color={colorEnabled ? "cyan" : undefined} bold>
           You › {entry.body}
         </Text>
       </Box>
     );
   }
-  const titleColor =
-    entry.kind === "error"
+  const titleColor = !colorEnabled
+    ? undefined
+    : entry.kind === "error"
       ? "red"
       : entry.kind === "review"
         ? "yellow"
@@ -54,7 +60,15 @@ function TranscriptItem({
     <Box marginTop={1} flexDirection="column">
       {entry.title && (
         <Text bold color={titleColor}>
-          {entry.kind === "error" ? "! " : entry.kind === "review" ? "◆ " : ""}
+          {entry.kind === "error"
+            ? "× "
+            : entry.kind === "review"
+              ? "◆ "
+              : entry.kind === "answer"
+                ? "↳ "
+                : entry.kind === "status"
+                  ? "i "
+                  : "· "}
           {entry.title}
         </Text>
       )}
@@ -65,7 +79,9 @@ function TranscriptItem({
         return (
           <Text
             key={`${entry.id}-${index}`}
-            color={severity ? SEVERITY_COLORS[severity] : undefined}
+            color={
+              colorEnabled && severity ? SEVERITY_COLORS[severity] : undefined
+            }
           >
             {line}
           </Text>
@@ -80,67 +96,126 @@ export function SessionView({
   input,
   onInput,
   onSubmit,
+  terminalWidth = 100,
+  terminalHeight = 40,
+  colorEnabled = true,
 }: SessionViewProps): React.JSX.Element {
   const header = state.header;
-  const recent = state.transcript.slice(-24);
+  const narrow = terminalWidth < 96;
+  const recent = state.transcript.slice(
+    -Math.max(6, Math.min(narrow ? 12 : 24, terminalHeight - 17)),
+  );
+  const accent = colorEnabled ? "cyan" : undefined;
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box justifyContent="space-between">
-        <Text bold color="cyan">
-          ✈ PREFLIGHT
+        <Text bold color={accent}>
+          {narrow ? "──✈ PREFLIGHT" : "────✈  CODE PREFLIGHT"}
         </Text>
-        <Text dimColor>inspect before your code takes off</Text>
+        {!narrow && <Text dimColor>repository quality control</Text>}
       </Box>
 
       {header ? (
         <Box flexDirection="column" marginTop={1}>
-          <Box gap={1}>
+          <Text>
             <Text bold>{header.repository}</Text>
-            <Text color="cyan">{header.branch}</Text>
-            <Text dimColor>→ {header.baseBranch}</Text>
-            <Text color={header.behind > 0 ? "yellow" : undefined}>
-              ↑{header.ahead} ↓{header.behind}
+            {"  "}
+            <Text color={accent}>{header.branch}</Text>
+            <Text dimColor> → {header.baseBranch}</Text>
+            {"  "}
+            <Text
+              color={colorEnabled && header.behind > 0 ? "yellow" : undefined}
+            >
+              local ↑{header.ahead} ↓{header.behind}
             </Text>
-          </Box>
-          <Box gap={2}>
-            <Text color="green">{header.staged} staged</Text>
-            <Text color="yellow">{header.unstaged} unstaged</Text>
-            <Text color="magenta">{header.untracked} untracked</Text>
-            <Text color={header.conflicts ? "red" : undefined}>
-              {header.conflicts} conflicts
+          </Text>
+          <Text>
+            <Text color={colorEnabled ? "green" : undefined}>
+              +{header.staged} staged
             </Text>
-            <Text>
-              Provider: <Text bold>{header.provider}</Text>
-              {header.providerAvailability && (
-                <Text
-                  color={
-                    header.providerAvailability === "ready" ? "green" : "yellow"
-                  }
-                >
-                  {` · ${header.providerAvailability}`}
+            {"  "}
+            <Text color={colorEnabled ? "yellow" : undefined}>
+              ~{header.unstaged} changed
+            </Text>
+            {"  "}
+            <Text color={colorEnabled ? "magenta" : undefined}>
+              ?{header.untracked} new
+            </Text>
+            {"  "}
+            <Text color={colorEnabled && header.conflicts ? "red" : undefined}>
+              !{header.conflicts} conflicts
+            </Text>
+            {!narrow && (
+              <>
+                {"  "}
+                <Text>
+                  provider <Text bold>{header.provider}</Text> [
+                  {header.providerAvailability ?? "unknown"}]
                 </Text>
-              )}
-            </Text>
+                {"  "}
+                <Text>
+                  mode <Text bold>{header.reviewMode.replace("_", "+")}</Text>
+                </Text>
+              </>
+            )}
+          </Text>
+          {narrow && (
             <Text>
-              Mode: <Text bold>{header.reviewMode.replace("_", "+")}</Text>
+              provider <Text bold>{header.provider}</Text> [
+              {header.providerAvailability ?? "unknown"}] · mode{" "}
+              {header.reviewMode.replace("_", "+")}
             </Text>
-          </Box>
+          )}
         </Box>
       ) : (
         <Box marginTop={1}>
-          <Text color="cyan">Inspecting repository…</Text>
+          <Text color={accent}>Inspecting repository…</Text>
         </Box>
       )}
 
       <Box marginTop={1} flexDirection="column">
         {recent.map((entry) => (
-          <TranscriptItem key={entry.id} entry={entry} />
+          <TranscriptItem
+            key={entry.id}
+            entry={entry}
+            colorEnabled={colorEnabled}
+          />
         ))}
       </Box>
 
+      {state.pipeline && (
+        <Box marginTop={1} gap={narrow ? 1 : 2} flexWrap="wrap">
+          {state.pipeline.map((item) => (
+            <Text
+              key={item.label}
+              color={
+                !colorEnabled
+                  ? undefined
+                  : item.status === "failed"
+                    ? "red"
+                    : item.status === "complete"
+                      ? "green"
+                      : item.status === "active"
+                        ? "cyan"
+                        : "gray"
+              }
+            >
+              {item.status === "complete"
+                ? "✓"
+                : item.status === "active"
+                  ? "◐"
+                  : item.status === "failed"
+                    ? "×"
+                    : "○"}{" "}
+              {item.label}
+            </Text>
+          ))}
+        </Box>
+      )}
+
       {state.activity && (
         <Box marginTop={1}>
-          <Text color="cyan">◐ {state.activity}</Text>
+          <Text color={accent}>◐ {state.activity}</Text>
         </Box>
       )}
 
@@ -149,12 +224,12 @@ export function SessionView({
           marginTop={1}
           paddingX={1}
           flexDirection="column"
-          borderStyle="round"
-          borderColor="yellow"
+          borderStyle={narrow ? "single" : "round"}
+          borderColor={colorEnabled ? "yellow" : undefined}
         >
           <Text bold>{state.pendingDecision.title}</Text>
           <Text>{state.pendingDecision.body}</Text>
-          <Text color="yellow">
+          <Text color={colorEnabled ? "yellow" : undefined}>
             y {state.pendingDecision.confirmLabel} · n cancel
           </Text>
         </Box>
@@ -165,15 +240,20 @@ export function SessionView({
           marginTop={1}
           paddingX={1}
           flexDirection="column"
-          borderStyle="round"
-          borderColor="cyan"
+          borderStyle={narrow ? "single" : "round"}
+          borderColor={accent}
         >
-          <Text bold color="cyan">
+          <Text bold color={accent}>
             {state.overlay.title}
           </Text>
           {state.overlay.body ? (
             <>
-              <Text>{state.overlay.body.slice(0, 12000)}</Text>
+              <Text>
+                {state.overlay.body
+                  .split("\n")
+                  .slice(0, Math.max(8, terminalHeight - 12))
+                  .join("\n")}
+              </Text>
               <Text dimColor>Esc close</Text>
             </>
           ) : (
@@ -189,8 +269,8 @@ export function SessionView({
         </Box>
       )}
 
-      <Box marginTop={1} borderStyle="single" borderColor="gray" paddingX={1}>
-        <Text color="cyan">› </Text>
+      <Box marginTop={1} borderStyle="single" borderColor={accent} paddingX={1}>
+        <Text color={accent}>preflight › </Text>
         <TextInput
           value={input}
           onChange={onInput}
@@ -202,8 +282,9 @@ export function SessionView({
         />
       </Box>
       <Text dimColor>
-        /tree · /commits · /review staged · /provider · /help · Ctrl+C
-        cancel/exit
+        {narrow
+          ? "/help · ↑↓ history · Ctrl+C cancel"
+          : "/tree · /commits · /review staged · /mode · /help · ↑↓ history · Ctrl+C cancel/exit"}
       </Text>
     </Box>
   );
@@ -215,6 +296,7 @@ export function App({
 }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const { setRawMode } = useStdin();
+  const { stdout } = useStdout();
   const [controller] = useState(
     () =>
       supplied ??
@@ -232,6 +314,10 @@ export function App({
   );
   const [state, setState] = useState<SessionState>(controller.state);
   const [input, setInput] = useState("");
+  const [dimensions, setDimensions] = useState({
+    width: stdout.columns ?? 100,
+    height: stdout.rows ?? 40,
+  });
 
   useEffect(() => {
     const unsubscribe = controller.subscribe(setState);
@@ -246,10 +332,26 @@ export function App({
     if (state.shouldExit) exit();
   }, [state.shouldExit, exit]);
 
+  useEffect(() => {
+    const resize = (): void =>
+      setDimensions({
+        width: stdout.columns ?? 100,
+        height: stdout.rows ?? 40,
+      });
+    stdout.on("resize", resize);
+    return () => {
+      stdout.off("resize", resize);
+    };
+  }, [stdout]);
+
   useInput(
     (value, key) => {
       if (key.ctrl && value === "c") controller.cancel();
       if (key.escape && state.overlay) void controller.submit("/close");
+      if (!state.overlay && !state.pendingDecision && !state.busy) {
+        if (key.upArrow) setInput(controller.history("previous"));
+        if (key.downArrow) setInput(controller.history("next"));
+      }
       if (state.pendingDecision && (value === "y" || value === "n")) {
         void controller.confirm(state.pendingDecision.id, value === "y");
       }
@@ -268,6 +370,9 @@ export function App({
       input={input}
       onInput={setInput}
       onSubmit={submit}
+      terminalWidth={dimensions.width}
+      terminalHeight={dimensions.height}
+      colorEnabled={!process.env.NO_COLOR}
     />
   );
 }

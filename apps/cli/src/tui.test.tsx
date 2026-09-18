@@ -47,7 +47,7 @@ describe("SessionView", () => {
     expect(frame).toContain("PREFLIGHT");
     expect(frame).toContain("code-preflight");
     expect(frame).toContain("feature/auth");
-    expect(frame).toContain("Codex CLI · ready");
+    expect(frame).toContain("provider Codex CLI [ready]");
     expect(frame).toContain("Expired tokens are accepted");
     expect(frame).toContain("explain finding 1");
   });
@@ -80,5 +80,53 @@ describe("SessionView", () => {
 
     expect(view.lastFrame()).toContain("Current branch commits");
     expect(view.lastFrame()).toContain("Fix token validation");
+  });
+
+  it("keeps status semantics and review progress readable in a narrow terminal", () => {
+    const view = render(
+      <SessionView
+        state={{
+          started: true,
+          busy: true,
+          shouldExit: false,
+          header: {
+            repository: "code-preflight",
+            root: "/repo",
+            branch: "main",
+            baseBranch: "main",
+            upstream: "origin/main",
+            ahead: 0,
+            behind: 0,
+            staged: 2,
+            unstaged: 1,
+            untracked: 1,
+            conflicts: 0,
+            provider: "Codex CLI",
+            providerAvailability: "ready",
+            reviewMode: "auto_plus",
+          },
+          transcript: [],
+          pipeline: [
+            { label: "snapshot", status: "complete" },
+            { label: "provider", status: "active" },
+            { label: "verify", status: "pending" },
+          ],
+        }}
+        input=""
+        onInput={() => {}}
+        onSubmit={() => {}}
+        terminalWidth={58}
+        terminalHeight={24}
+        colorEnabled={false}
+      />,
+    );
+
+    const frame = view.lastFrame() ?? "";
+    expect(frame).toContain("+2 staged");
+    expect(frame).toContain("~1 changed");
+    expect(frame).toContain("✓ snapshot");
+    expect(frame).toContain("◐ provider");
+    expect(frame).toContain("○ verify");
+    expect(frame).not.toContain("repository quality control");
   });
 });
