@@ -101,3 +101,30 @@ def test_opencode_without_any_credentials_requires_authentication(
 
     assert descriptor.authentication == AuthenticationState.REQUIRED
     assert descriptor.availability == ProviderAvailability.DEGRADED
+
+
+def test_authenticated_opencode_requires_explicit_standard_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        providers.shutil,
+        "which",
+        lambda executable: "/bin/opencode" if executable == "opencode" else None,
+    )
+
+    def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+        if command == ["opencode", "--version"]:
+            return completed(command, "1.0\n")
+        if command == ["opencode", "run", "--help"]:
+            return completed(command, "--format --dir --pure\n")
+        if command == ["opencode", "auth", "list"]:
+            return completed(command, "● OpenAI oauth\n")
+        return completed(command, returncode=1)
+
+    monkeypatch.setattr(providers, "_run", run)
+
+    descriptor = next(item for item in providers.discover_providers({}) if item.id == "opencode")
+
+    assert descriptor.authentication == AuthenticationState.AUTHENTICATED
+    assert descriptor.model == ModelState.SELECTION_REQUIRED
+    assert descriptor.availability == ProviderAvailability.DEGRADED

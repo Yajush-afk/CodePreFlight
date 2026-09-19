@@ -78,6 +78,9 @@ Codex login flow, while `preflight provider login opencode` launches OpenCode au
 Ollama stays local and requires an installed model; API providers read named environment
 variables and CodePreFlight never stores the secret value. Use
 `preflight provider test <id> --yes` for a synthetic smoke test that sends no repository content.
+Use `/model` and `/variant` in the interactive session to select a provider model and reasoning
+effort. CodePreFlight exposes only the standard service tier and filters fast-tier model aliases.
+For routine reviews, the picker recommends a capable non-flagship model to reduce credit usage.
 
 ## Reproducible seeded-defect demonstration
 

@@ -12,20 +12,34 @@ Provider readiness is reported separately for installation, authentication, mode
 invocation compatibility. A running Ollama daemon without the configured model is degraded, not
 ready. CodePreFlight never silently replaces an invalid default.
 
+CodePreFlight uses provider standard service only. Fast-tier model aliases such as names ending in
+`-fast` are excluded from model selection and rejected in configuration. Model variants control
+reasoning effort; they do not enable a faster billing or service tier.
+
 ## Subscription CLIs
 
 ```bash
 preflight provider login codex
+preflight provider models codex
+preflight provider variants codex --model <model>
+preflight provider use codex --model <model> --variant <variant> --write
 preflight provider use codex --write
 
 preflight provider login opencode
 preflight provider models opencode
-preflight provider use opencode --model <model> --write
+preflight provider variants opencode --model <provider/model>
+preflight provider use opencode --model <provider/model> --variant <variant> --write
 ```
 
 The login process belongs to the provider CLI. The TUI temporarily yields terminal control, then
-refreshes readiness. Claude CLI reuse is experimental and shows policy and billing guidance before
-activation.
+verifies authentication with the provider-owned status command and refreshes readiness. OpenCode
+requires an explicit standard-tier model selection after authentication. Claude CLI reuse is
+experimental and shows policy and billing guidance before activation.
+
+Inside the TUI, use `/model` to choose a model and `/variant` to choose its reasoning variant.
+`/varient` is accepted as a spelling alias. The model picker recommends using a capable
+non-flagship model for routine reviews so flagship credits remain available for unusually difficult
+changes.
 
 ## Local Ollama
 

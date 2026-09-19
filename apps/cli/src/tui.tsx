@@ -22,6 +22,7 @@ interface SessionViewProps {
   terminalWidth?: number;
   terminalHeight?: number;
   colorEnabled?: boolean;
+  terminalHandoff?: boolean;
 }
 
 const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
@@ -99,7 +100,9 @@ export function SessionView({
   terminalWidth = 100,
   terminalHeight = 40,
   colorEnabled = true,
+  terminalHandoff = false,
 }: SessionViewProps): React.JSX.Element {
+  if (terminalHandoff) return <></>;
   const header = state.header;
   const narrow = terminalWidth < 96;
   const recent = state.transcript.slice(
@@ -150,7 +153,8 @@ export function SessionView({
             provider <Text bold>{header.provider}</Text> [
             {header.providerAvailability ?? "unknown"}] · auth{" "}
             {header.providerAuthentication ?? "unknown"} · model{" "}
-            {header.providerModel ?? "not applicable"}
+            {header.providerModel ?? "not applicable"} · variant{" "}
+            {header.providerVariant ?? "provider default"}
           </Text>
           <Text>
             privacy {header.providerPrivacy ?? "unknown"} · mode{" "}
@@ -237,7 +241,7 @@ export function SessionView({
           <Text bold color={accent}>
             {state.overlay.title}
           </Text>
-          {state.overlay.body ? (
+          {state.overlay.body && (
             <>
               <Text>
                 {state.overlay.body
@@ -245,9 +249,9 @@ export function SessionView({
                   .slice(0, Math.max(8, terminalHeight - 12))
                   .join("\n")}
               </Text>
-              <Text dimColor>Esc close</Text>
             </>
-          ) : (
+          )}
+          {state.overlay.items?.length ? (
             <SelectInput
               items={(state.overlay.items ?? []).map((item) => ({
                 label: item.label,
@@ -256,7 +260,8 @@ export function SessionView({
               onSelect={(item) => onSubmit(item.value)}
               limit={12}
             />
-          )}
+          ) : null}
+          <Text dimColor>Esc close</Text>
         </Box>
       )}
 
@@ -288,17 +293,21 @@ export function App({
   const { exit } = useApp();
   const { setRawMode } = useStdin();
   const { stdout } = useStdout();
+  const [terminalHandoff, setTerminalHandoff] = useState(false);
   const [controller] = useState(
     () =>
       supplied ??
       new SessionController({
         repositoryPath,
         loginProvider: async (provider) => {
+          setTerminalHandoff(true);
+          await new Promise<void>((resolve) => setImmediate(resolve));
           setRawMode(false);
           try {
             await loginProvider(provider);
           } finally {
             setRawMode(true);
+            setTerminalHandoff(false);
           }
         },
       }),
@@ -347,7 +356,7 @@ export function App({
         void controller.confirm(state.pendingDecision.id, value === "y");
       }
     },
-    { isActive: true },
+    { isActive: !terminalHandoff },
   );
 
   const submit = (value: string): void => {
@@ -364,6 +373,7 @@ export function App({
       terminalWidth={dimensions.width}
       terminalHeight={dimensions.height}
       colorEnabled={!process.env.NO_COLOR}
+      terminalHandoff={terminalHandoff}
     />
   );
 }

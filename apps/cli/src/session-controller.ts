@@ -34,6 +34,7 @@ export interface SessionHeader {
   providerAvailability?: string;
   providerAuthentication?: string;
   providerModel?: string;
+  providerVariant?: string;
   providerPrivacy?: string;
   pullRequest?: string;
   reviewMode: string;
@@ -108,6 +109,7 @@ interface ProviderView {
   authentication?: string;
   model?: string;
   model_name?: string | null;
+  variant_name?: string | null;
   sends_code_remotely?: boolean;
   detail?: string;
   kind?: string;
@@ -157,6 +159,8 @@ const HELP = [
   "/provider login <id> — launch provider-owned authentication",
   "/provider use <id> [model] — preview and select a provider",
   "/provider test <id> — run a synthetic readiness test",
+  "/model — choose the active provider model (standard service tier only)",
+  "/variant — choose the model reasoning variant (/varient is accepted as an alias)",
   "/help — show commands",
   "/clear — clear this ephemeral transcript",
   "/close — close the active browser",
@@ -409,7 +413,7 @@ export class SessionController {
     }
     if (command === "provider") {
       if (args[0] === "login" && args[1]) {
-        await this.login(args[1]);
+        this.confirmLogin(args[1]);
       } else if (args[0] === "use" && args[1]) {
         await this.configureProvider(args[1], args[2]);
       } else if (args[0] === "test" && args[1]) {
@@ -420,6 +424,26 @@ export class SessionController {
           async () => this.testProvider(args[1]),
         );
       } else this.openProviders();
+      return;
+    }
+    if (command === "model") {
+      if (args[0] === "set" && args[1]) {
+        await this.configureProvider(
+          this.activeProviderId ?? "",
+          decodeURIComponent(args[1]),
+        );
+      } else await this.openModels();
+      return;
+    }
+    if (command === "variant" || command === "varient") {
+      if (args[0] === "set" && args[1]) {
+        const provider = this.activeProvider();
+        await this.configureProvider(
+          provider?.id ?? "",
+          provider?.model_name ?? undefined,
+          decodeURIComponent(args[1]),
+        );
+      } else await this.openVariants();
       return;
     }
     this.append({
@@ -491,6 +515,7 @@ export class SessionController {
           (selected?.model === "not_applicable"
             ? "provider default"
             : (selected?.model ?? "unknown")),
+        providerVariant: selected?.variant_name ?? "provider default",
         providerPrivacy: selected
           ? selected.sends_code_remotely
             ? `remote ${selected.kind ?? "provider"}`
@@ -767,6 +792,99 @@ export class SessionController {
           command: `/provider use ${provider.id ?? ""}${provider.model_name ? ` ${provider.model_name}` : ""}`,
         })),
       },
+    });
+  }
+
+  private activeProvider(): ProviderView | undefined {
+    return this.providers.find((item) => item.id === this.activeProviderId);
+  }
+
+  private async openModels(): Promise<void> {
+    const provider = this.activeProvider();
+    if (!provider?.id) {
+      this.append({
+        kind: "error",
+        title: "Provider required",
+        body: "Choose a provider with /provider before selecting a model.",
+      });
+      return;
+    }
+    await this.runBusy("Loading standard-tier models…", async () => {
+      const result = await this.engine.request(
+        "provider",
+        this.options.repositoryPath,
+        { action: "models", provider: provider.id },
+      );
+      const models = (result.models as string[] | undefined) ?? [];
+      const details =
+        (result.details as Array<Record<string, unknown>> | undefined) ?? [];
+      const byId = new Map(
+        details.map((item) => [String(item.id ?? ""), item]),
+      );
+      this.patch({
+        overlay: {
+          kind: "providers",
+          title: "Choose review model",
+          body: "Recommendation: use a capable non-flagship model for routine reviews to reduce credit usage. Reserve flagship models for unusually difficult changes.\nCodePreFlight uses the standard service tier only; fast-tier models are excluded.",
+          items: models.map((model) => {
+            const detail = byId.get(model);
+            const label = String(detail?.label ?? model);
+            const description = String(detail?.description ?? "");
+            return {
+              label: `${model === provider.model_name ? "●" : "○"} ${label}${description ? ` · ${description}` : ""}`,
+              value: model,
+              command: `/model set ${encodeURIComponent(model)}`,
+            };
+          }),
+        },
+      });
+      if (!models.length) {
+        this.append({
+          kind: "error",
+          title: "No discoverable models",
+          body: `The ${provider.name ?? provider.id} CLI did not expose a model list.`,
+        });
+      }
+    });
+  }
+
+  private async openVariants(): Promise<void> {
+    const provider = this.activeProvider();
+    const model = provider?.model_name;
+    if (!provider?.id || !model) {
+      this.append({
+        kind: "error",
+        title: "Model required",
+        body: "Choose an explicit model with /model before selecting a variant.",
+      });
+      return;
+    }
+    await this.runBusy("Loading model variants…", async () => {
+      const result = await this.engine.request(
+        "provider",
+        this.options.repositoryPath,
+        { action: "variants", provider: provider.id, model },
+      );
+      const variants = (result.variants as string[] | undefined) ?? [];
+      this.patch({
+        overlay: {
+          kind: "providers",
+          title: "Choose model variant",
+          body: "Variants adjust reasoning effort, not service speed. CodePreFlight always uses the standard service tier.",
+          items: variants.map((variant) => ({
+            label: `${variant === provider.variant_name ? "●" : "○"} ${variant}`,
+            value: variant,
+            command: `/variant set ${encodeURIComponent(variant)}`,
+          })),
+        },
+      });
+      if (!variants.length) {
+        this.append({
+          kind: "status",
+          title: "No variants exposed",
+          body: `${model} does not expose selectable reasoning variants through ${provider.name ?? provider.id}.`,
+        });
+      }
     });
   }
 
@@ -1048,6 +1166,16 @@ export class SessionController {
     });
   }
 
+  private confirmLogin(provider: string): void {
+    const descriptor = this.providers.find((item) => item.id === provider);
+    this.requestDecision(
+      `Authenticate ${descriptor?.name ?? provider}?`,
+      "CodePreFlight will temporarily clear the TUI and give this provider's official CLI full terminal control. Credentials remain owned by the provider CLI.",
+      "open provider login",
+      async () => this.login(provider),
+    );
+  }
+
   private async login(provider: string): Promise<void> {
     if (!this.options.loginProvider) {
       this.append({
@@ -1062,7 +1190,7 @@ export class SessionController {
       await this.refreshContext();
       this.append({
         kind: "system",
-        body: `${provider} authentication refreshed.`,
+        body: `${provider} authentication verified.`,
       });
     });
   }
@@ -1070,12 +1198,21 @@ export class SessionController {
   private async configureProvider(
     provider: string,
     model?: string,
+    variant?: string,
   ): Promise<void> {
+    if (!provider) {
+      this.append({
+        kind: "error",
+        title: "Provider required",
+        body: "Choose a provider with /provider first.",
+      });
+      return;
+    }
     await this.runBusy("Preparing provider configuration…", async () => {
       const preview = await this.engine.request(
         "provider",
         this.options.repositoryPath,
-        { action: "configure", provider, model, write: false },
+        { action: "configure", provider, model, variant, write: false },
       );
       this.append({
         kind: "status",
@@ -1085,7 +1222,7 @@ export class SessionController {
         ),
       });
       this.requestDecision(
-        `Use ${provider}${model ? ` · ${model}` : ""}?`,
+        `Use ${provider}${model ? ` · ${model}` : ""}${variant ? ` · ${variant}` : ""}?`,
         "This updates the repository's non-secret .codepreflight.toml configuration.",
         "write configuration",
         async () => {
@@ -1094,6 +1231,7 @@ export class SessionController {
               action: "configure",
               provider,
               model,
+              variant,
               write: true,
             });
             await this.refreshContext();

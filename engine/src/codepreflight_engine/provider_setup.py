@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import tomllib
 from difflib import unified_diff
@@ -21,6 +23,7 @@ def configure_provider(
     model: str | None,
     global_scope: bool,
     write: bool,
+    variant: str | None = None,
 ) -> dict[str, object]:
     if provider_id not in PROVIDER_IDS:
         raise CodePreflightError("unknown_provider", f"Unknown provider: {provider_id}")
@@ -38,6 +41,12 @@ def configure_provider(
         raise CodePreflightError("invalid_config", "The review configuration must be a table")
     review["provider"] = provider_id
     if model:
+        if _is_speed_model(model):
+            raise CodePreflightError(
+                "provider_speed_model_unsupported",
+                "CodePreFlight uses the standard service tier only; select the non-fast model.",
+                recoverable=True,
+            )
         provider_settings = config.setdefault("providers", {})
         if not isinstance(provider_settings, dict):
             raise CodePreflightError(
@@ -49,6 +58,20 @@ def configure_provider(
                 "invalid_config", f"Provider configuration for {provider_id} must be a table"
             )
         selected["model"] = model
+        if variant is None:
+            selected.pop("variant", None)
+    if variant:
+        provider_settings = config.setdefault("providers", {})
+        if not isinstance(provider_settings, dict):
+            raise CodePreflightError(
+                "invalid_config", "The providers configuration must be a table"
+            )
+        selected = provider_settings.setdefault(provider_id, {})
+        if not isinstance(selected, dict):
+            raise CodePreflightError(
+                "invalid_config", f"Provider configuration for {provider_id} must be a table"
+            )
+        selected["variant"] = variant
 
     CodePreflightConfig.model_validate(config)
     rendered = tomli_w.dumps(config)
@@ -68,6 +91,7 @@ def configure_provider(
     return {
         "provider": provider_id,
         "model": model,
+        "variant": variant,
         "scope": "global" if global_scope else "repository",
         "path": str(path),
         "written": write,
@@ -88,7 +112,30 @@ def provider_models(provider_id: str) -> dict[str, object]:
         models = [
             line.split()[0] for line in stdout.splitlines()[1:] if line.strip() and line.split()
         ]
-        return {"provider": provider_id, "models": models}
+        return {
+            "provider": provider_id,
+            "models": models,
+            "details": [
+                {"id": model, "label": model, "description": "Local model"} for model in models
+            ],
+            "serviceTier": "standard",
+        }
+    if provider_id == "codex":
+        entries = _codex_model_entries()
+        details = [
+            {
+                "id": str(entry["slug"]),
+                "label": str(entry.get("display_name") or entry["slug"]),
+                "description": str(entry.get("description") or ""),
+            }
+            for entry in entries
+        ]
+        return {
+            "provider": provider_id,
+            "models": [item["id"] for item in details],
+            "details": details,
+            "serviceTier": "standard",
+        }
     if provider_id == "opencode":
         code, stdout, stderr = _run(["opencode", "models"])
         if code != 0:
@@ -97,11 +144,92 @@ def provider_models(provider_id: str) -> dict[str, object]:
                 stderr.strip() or "OpenCode models are unavailable",
                 recoverable=True,
             )
-        models = [line.strip() for line in stdout.splitlines() if "/" in line and line.strip()]
-        return {"provider": provider_id, "models": models}
+        models = [
+            line.strip()
+            for line in stdout.splitlines()
+            if "/" in line and line.strip() and not _is_speed_model(line.strip())
+        ]
+        return {
+            "provider": provider_id,
+            "models": models,
+            "details": [{"id": model, "label": model, "description": ""} for model in models],
+            "serviceTier": "standard",
+        }
     if provider_id not in PROVIDER_IDS:
         raise CodePreflightError("unknown_provider", f"Unknown provider: {provider_id}")
-    return {"provider": provider_id, "models": []}
+    return {"provider": provider_id, "models": [], "details": [], "serviceTier": "standard"}
+
+
+def provider_variants(provider_id: str, model: str) -> dict[str, object]:
+    if not model:
+        raise CodePreflightError(
+            "provider_model_required",
+            "Select a model before selecting a variant.",
+            recoverable=True,
+        )
+    variants: list[str] = []
+    default_variant: str | None = None
+    if provider_id == "codex":
+        entry = next((item for item in _codex_model_entries() if item.get("slug") == model), None)
+        if entry:
+            variants = [
+                str(item["effort"])
+                for item in entry.get("supported_reasoning_levels", [])
+                if isinstance(item, dict) and item.get("effort")
+            ]
+            default_variant = str(entry.get("default_reasoning_level") or "") or None
+    elif provider_id == "opencode":
+        provider_name = model.split("/", 1)[0]
+        code, stdout, stderr = _run(["opencode", "models", provider_name, "--verbose"])
+        if code != 0:
+            raise CodePreflightError(
+                "provider_variants_unavailable",
+                stderr.strip() or "OpenCode model variants are unavailable",
+                recoverable=True,
+            )
+        marker = f"{model}\n"
+        marker_index = stdout.find(marker)
+        object_index = stdout.find("{", marker_index + len(marker)) if marker_index >= 0 else -1
+        if object_index >= 0:
+            try:
+                metadata, _ = json.JSONDecoder().raw_decode(stdout[object_index:])
+            except json.JSONDecodeError:
+                metadata = {}
+            raw_variants = metadata.get("variants", {}) if isinstance(metadata, dict) else {}
+            if isinstance(raw_variants, dict):
+                variants = [str(value) for value in raw_variants]
+    elif provider_id not in PROVIDER_IDS:
+        raise CodePreflightError("unknown_provider", f"Unknown provider: {provider_id}")
+    return {
+        "provider": provider_id,
+        "model": model,
+        "variants": variants,
+        "defaultVariant": default_variant,
+        "serviceTier": "standard",
+    }
+
+
+def _codex_model_entries() -> list[dict[str, Any]]:
+    root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    path = root / "models_cache.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    raw = value.get("models", []) if isinstance(value, dict) else []
+    return [
+        item
+        for item in raw
+        if isinstance(item, dict)
+        and item.get("slug")
+        and item.get("visibility", "list") != "hide"
+        and not _is_speed_model(str(item["slug"]))
+    ]
+
+
+def _is_speed_model(model: str) -> bool:
+    name = model.lower().rsplit("/", 1)[-1]
+    return name.endswith("-fast") or name.endswith(":fast")
 
 
 def _run(command: list[str]) -> tuple[int, str, str]:

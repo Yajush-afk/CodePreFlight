@@ -39,11 +39,21 @@ class ProviderRegistry:
                 base_url=str(provider_config.get("base_url", "http://127.0.0.1:11434")),
             )
         if provider_id == "codex":
-            return CodexCliAdapter(descriptor, timeout=timeout)
+            return CodexCliAdapter(
+                descriptor,
+                timeout=timeout,
+                model=provider_config.get("model"),
+                variant=provider_config.get("variant"),
+            )
         if provider_id == "claude":
-            return ClaudeCliAdapter(descriptor, timeout=timeout)
+            return ClaudeCliAdapter(descriptor, timeout=timeout, model=provider_config.get("model"))
         if provider_id == "opencode":
-            return OpenCodeCliAdapter(descriptor, timeout=timeout)
+            return OpenCodeCliAdapter(
+                descriptor,
+                timeout=timeout,
+                model=provider_config.get("model"),
+                variant=provider_config.get("variant"),
+            )
         if provider_id == "openai-compatible":
             api_key_env = str(provider_config.get("api_key_env", "OPENAI_API_KEY"))
             if os.environ.get(api_key_env):

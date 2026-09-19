@@ -29,6 +29,7 @@ class ReviewSettings(ConfigModel):
 
 class ProviderSettings(ConfigModel):
     model: str | None = None
+    variant: str | None = None
     base_url: str | None = None
     api_key_env: str | None = None
     timeout_seconds: int | None = Field(default=None, ge=1, le=1800)
