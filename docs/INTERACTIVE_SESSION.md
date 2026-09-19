@@ -22,6 +22,8 @@ to refresh this display. Suggested actions follow the current repository state.
 /review pr
 /pr
 /provider
+/model
+/variant
 /mode
 /jobs
 /automation grant
@@ -36,6 +38,12 @@ to refresh this display. Suggested actions follow the current repository state.
 Slash commands route deterministically. Plain text is sent only as a repository-scoped question,
 such as “What changed on this branch?”, “Explain finding 2”, or “Which tests should I run?”. The
 provider receives locally gathered evidence and has no editing or shell capability.
+
+`/model` opens the active provider's discoverable standard-tier models. Fast-tier aliases are not
+shown. `/variant` selects provider-supported reasoning effort without changing service speed;
+`/varient` is also accepted. Provider login asks for confirmation, clears the Ink frame while the
+official CLI owns the terminal, verifies the resulting authentication state, and then restores the
+session.
 
 Use Up and Down in the composer for ephemeral command history. Use arrows and Enter in a focused
 tree, branch, commit, or provider list. Escape closes an overlay. The first Ctrl+C cancels active

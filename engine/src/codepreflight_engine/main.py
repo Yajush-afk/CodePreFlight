@@ -25,7 +25,7 @@ from .local_log import log_operation
 from .models import EngineEvent, EngineFailure, EngineRequest
 from .panel import PanelReviewer
 from .protocol_generated import ENGINE_COMMANDS, PROTOCOL_VERSION
-from .provider_setup import configure_provider, provider_models
+from .provider_setup import configure_provider, provider_models, provider_variants
 from .providers import discover_providers
 from .pull_request import prepare_pull_request
 from .repository import RepositoryInspector
@@ -266,6 +266,15 @@ def dispatch(request: EngineRequest) -> None:
         if action == "models":
             complete(request.requestId, provider_models(str(request.payload.get("provider", ""))))
             return
+        if action == "variants":
+            complete(
+                request.requestId,
+                provider_variants(
+                    str(request.payload.get("provider", "")),
+                    str(request.payload.get("model", "")),
+                ),
+            )
+            return
         if action == "configure":
             complete(
                 request.requestId,
@@ -273,6 +282,9 @@ def dispatch(request: EngineRequest) -> None:
                     provider_root,
                     provider_id=str(request.payload.get("provider", "")),
                     model=(str(request.payload["model"]) if request.payload.get("model") else None),
+                    variant=(
+                        str(request.payload["variant"]) if request.payload.get("variant") else None
+                    ),
                     global_scope=bool(request.payload.get("global", False)),
                     write=bool(request.payload.get("write", False)),
                 ),
@@ -281,7 +293,7 @@ def dispatch(request: EngineRequest) -> None:
         if action != "list":
             raise CodePreflightError(
                 "invalid_provider_action",
-                "Provider action must be list, models, test, or configure",
+                "Provider action must be list, models, variants, test, or configure",
             )
         complete(
             request.requestId,

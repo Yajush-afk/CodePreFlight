@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from .models import (
@@ -33,34 +34,10 @@ REQUIRED_FLAGS = {
 
 def discover_providers(config: dict[str, Any] | None = None) -> list[ProviderDescriptor]:
     config = config or {}
-    providers: list[ProviderDescriptor] = []
-    for executable, name, kind, remote in CLI_PROVIDERS:
-        path = shutil.which(executable)
-        version = _version(executable) if path else None
-        provider_config = config.get("providers", {}).get(executable, {})
-        if path:
-            capabilities = _health(executable, provider_config)
-        else:
-            capabilities = {
-                "state": ProviderState.NOT_INSTALLED,
-                "installation": InstallationState.MISSING,
-                "authentication": AuthenticationState.UNKNOWN,
-                "model": ModelState.NOT_APPLICABLE,
-                "invocation": InvocationState.UNTESTED,
-                "availability": ProviderAvailability.UNAVAILABLE,
-                "model_name": provider_config.get("model"),
-                "detail": "executable not found on PATH",
-            }
-        providers.append(
-            ProviderDescriptor(
-                id=executable,
-                name=name,
-                kind=kind,
-                **capabilities,
-                executable=path,
-                version=version,
-                sends_code_remotely=remote,
-                experimental=executable == "claude",
+    with ThreadPoolExecutor(max_workers=len(CLI_PROVIDERS)) as executor:
+        providers = list(
+            executor.map(
+                lambda definition: _discover_cli_provider(definition, config), CLI_PROVIDERS
             )
         )
 
@@ -85,11 +62,53 @@ def discover_providers(config: dict[str, Any] | None = None) -> list[ProviderDes
                 .get("openai-compatible", {})
                 .get("model", "gpt-4.1-mini")
             ),
+            variant_name=(
+                str(config.get("providers", {}).get("openai-compatible", {}).get("variant"))
+                if config.get("providers", {}).get("openai-compatible", {}).get("variant")
+                else None
+            ),
             sends_code_remotely=True,
             detail="uses OPENAI_API_KEY" if configured else "set OPENAI_API_KEY",
         )
     )
     return providers
+
+
+def _discover_cli_provider(
+    definition: tuple[str, str, ProviderKind, bool], config: dict[str, Any]
+) -> ProviderDescriptor:
+    executable, name, kind, remote = definition
+    path = shutil.which(executable)
+    provider_config = config.get("providers", {}).get(executable, {})
+    if path:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            version_future = executor.submit(_version, executable)
+            health_future = executor.submit(_health, executable, provider_config)
+            version = version_future.result()
+            capabilities = health_future.result()
+    else:
+        version = None
+        capabilities = {
+            "state": ProviderState.NOT_INSTALLED,
+            "installation": InstallationState.MISSING,
+            "authentication": AuthenticationState.UNKNOWN,
+            "model": ModelState.NOT_APPLICABLE,
+            "invocation": InvocationState.UNTESTED,
+            "availability": ProviderAvailability.UNAVAILABLE,
+            "model_name": provider_config.get("model"),
+            "variant_name": provider_config.get("variant"),
+            "detail": "executable not found on PATH",
+        }
+    return ProviderDescriptor(
+        id=executable,
+        name=name,
+        kind=kind,
+        **capabilities,
+        executable=path,
+        version=version,
+        sends_code_remotely=remote,
+        experimental=executable == "claude",
+    )
 
 
 def _version(executable: str) -> str | None:
@@ -113,6 +132,7 @@ def _health(executable: str, provider_config: dict[str, Any]) -> dict[str, Any]:
                 "invocation": InvocationState.FAILED,
                 "availability": ProviderAvailability.DEGRADED,
                 "model_name": model_name,
+                "variant_name": None,
                 "detail": "Ollama is installed but its runtime is unavailable",
             }
         names = {
@@ -131,6 +151,7 @@ def _health(executable: str, provider_config: dict[str, Any]) -> dict[str, Any]:
                 ProviderAvailability.READY if available else ProviderAvailability.DEGRADED
             ),
             "model_name": model_name,
+            "variant_name": None,
             "detail": (
                 f"model {model_name} is available"
                 if available
@@ -170,21 +191,28 @@ def _health(executable: str, provider_config: dict[str, Any]) -> dict[str, Any]:
     authenticated = bool(result and result.returncode == 0)
     if executable == "opencode":
         authenticated = authenticated and bool(re.search(r"(?m)^\s*[●•]\s+\S+", output))
+    configured_model = provider_config.get("model")
+    model_required = executable == "opencode" and not configured_model
+    ready = authenticated and not model_required
     return {
-        "state": ProviderState.READY if authenticated else ProviderState.INSTALLED,
+        "state": ProviderState.READY if ready else ProviderState.INSTALLED,
         "installation": InstallationState.INSTALLED,
         "authentication": (
             AuthenticationState.AUTHENTICATED if authenticated else AuthenticationState.REQUIRED
         ),
-        "model": ModelState.NOT_APPLICABLE,
+        "model": ModelState.SELECTION_REQUIRED if model_required else ModelState.NOT_APPLICABLE,
+        "model_name": configured_model,
+        "variant_name": provider_config.get("variant"),
         "invocation": InvocationState.VERIFIED if authenticated else InvocationState.UNTESTED,
-        "availability": (
-            ProviderAvailability.READY if authenticated else ProviderAvailability.DEGRADED
-        ),
+        "availability": ProviderAvailability.READY if ready else ProviderAvailability.DEGRADED,
         "detail": (
-            "authentication and required CLI capabilities verified"
-            if authenticated
-            else "installed; authentication is required"
+            "authentication verified; select a standard-tier model"
+            if model_required
+            else (
+                "authentication and required CLI capabilities verified"
+                if authenticated
+                else "installed; authentication is required"
+            )
         ),
     }
 

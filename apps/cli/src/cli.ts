@@ -438,6 +438,33 @@ provider
   });
 
 provider
+  .command("variants <provider>")
+  .description("list reasoning variants for a selected provider model")
+  .requiredOption("--model <model>", "model whose variants should be listed")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (providerId: string, options: { model: string; json?: boolean }) => {
+      try {
+        const result = await client.request(
+          "provider",
+          resolve(process.cwd()),
+          {
+            action: "variants",
+            provider: providerId,
+            model: options.model,
+          },
+        );
+        printValue(result, Boolean(options.json));
+      } catch (error) {
+        process.stderr.write(
+          `${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exitCode = 2;
+      }
+    },
+  );
+
+provider
   .command("test <provider>")
   .description("run a synthetic review without sending repository content")
   .option("--yes", "approve consuming provider usage for the smoke test")
@@ -471,6 +498,7 @@ provider
   .command("use <provider>")
   .description("preview or save a non-secret default provider and model")
   .option("--model <model>", "select a provider model")
+  .option("--variant <variant>", "select the model reasoning variant")
   .option(
     "--global",
     "write the XDG user configuration instead of repository configuration",
@@ -482,6 +510,7 @@ provider
       providerId: string,
       options: {
         model?: string;
+        variant?: string;
         global?: boolean;
         write?: boolean;
         json?: boolean;
@@ -495,6 +524,7 @@ provider
             action: "configure",
             provider: providerId,
             model: options.model,
+            variant: options.variant,
             global: Boolean(options.global),
             write: Boolean(options.write),
           },

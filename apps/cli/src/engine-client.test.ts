@@ -70,9 +70,9 @@ describe("EngineClient process protocol", () => {
       engine,
       `#!/usr/bin/env node
 import { rmSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => { rmSync(${JSON.stringify(marker)}, {force:true}); process.exit(0); });
 writeFileSync(${JSON.stringify(marker)}, "active");
 process.stdout.write(JSON.stringify({protocolVersion:2,requestId:"",event:"ready",payload:{}}) + "\\n");
-process.on("SIGTERM", () => { rmSync(${JSON.stringify(marker)}, {force:true}); process.exit(0); });
 process.stdin.resume();
 `,
     );
@@ -82,11 +82,21 @@ process.stdin.resume();
       persistent: true,
       engineCommand: [engine],
     });
-    const pending = client.request("status", repository, {}, undefined, {
-      signal: controller.signal,
+    let markReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolveReady) => {
+      markReady = resolveReady;
     });
+    const pending = client.request(
+      "status",
+      repository,
+      {},
+      (event) => {
+        if (event.event === "ready") markReady?.();
+      },
+      { signal: controller.signal },
+    );
 
-    await new Promise((resolveWait) => setTimeout(resolveWait, 30));
+    await ready;
     controller.abort();
 
     await expect(pending).rejects.toMatchObject<Partial<EngineRequestError>>({

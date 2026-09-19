@@ -154,6 +154,7 @@ class ProviderDescriptor(StrictModel):
     invocation: InvocationState = InvocationState.UNTESTED
     availability: ProviderAvailability = ProviderAvailability.READY
     model_name: str | None = None
+    variant_name: str | None = None
     experimental: bool = False
     executable: str | None = None
     version: str | None = None

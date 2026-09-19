@@ -10,7 +10,31 @@ from .models import ProviderReviewResponse
 
 
 def provider_output_schema() -> dict[str, object]:
-    return ProviderReviewResponse.model_json_schema()
+    schema = ProviderReviewResponse.model_json_schema()
+    _make_strict_provider_schema(schema)
+    return schema
+
+
+def _make_strict_provider_schema(value: object) -> None:
+    """Make Pydantic's schema compatible with strict provider output schemas.
+
+    Codex/OpenAI require every object property to be listed in ``required``.
+    Optional values remain optional through their nullable type, not omission.
+    Defaults are validation behavior and are not part of the provider contract.
+    """
+    if isinstance(value, list):
+        for item in value:
+            _make_strict_provider_schema(item)
+        return
+    if not isinstance(value, dict):
+        return
+    value.pop("default", None)
+    properties = value.get("properties")
+    if isinstance(properties, dict):
+        value["required"] = list(properties)
+        value["additionalProperties"] = False
+    for child in value.values():
+        _make_strict_provider_schema(child)
 
 
 def provider_output_schema_json() -> str:

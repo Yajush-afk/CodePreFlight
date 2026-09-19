@@ -51,7 +51,41 @@ class FakeEngine implements SessionEngine {
         trusted: true,
       };
     }
-    if (command === "provider") return providers;
+    if (command === "provider") {
+      if (payload.action === "models") {
+        return {
+          provider: payload.provider,
+          serviceTier: "standard",
+          models: ["gpt-flagship", "gpt-economy"],
+          details: [
+            {
+              id: "gpt-flagship",
+              label: "Flagship",
+              description: "Most capable",
+            },
+            { id: "gpt-economy", label: "Economy", description: "Lower usage" },
+          ],
+        };
+      }
+      if (payload.action === "variants") {
+        return {
+          provider: payload.provider,
+          model: payload.model,
+          variants: ["low", "medium", "high"],
+          defaultVariant: "medium",
+        };
+      }
+      if (payload.action === "configure") {
+        return {
+          provider: payload.provider,
+          model: payload.model,
+          variant: payload.variant,
+          written: payload.write,
+          diff: "provider configuration diff",
+        };
+      }
+      return providers;
+    }
     if (command === "automation") {
       if (payload.action === "status") {
         return { mode: this.automationMode, grant: null, jobs: [] };
@@ -340,9 +374,61 @@ describe("SessionController", () => {
         action: "configure",
         provider: "codex",
         model: undefined,
+        variant: undefined,
         write: true,
       },
     });
+  });
+
+  it("opens model and variant selectors without speed-tier choices", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/model");
+    expect(controller.state.overlay?.title).toBe("Choose review model");
+    expect(controller.state.overlay?.body).toContain("non-flagship");
+    expect(controller.state.overlay?.items?.map((item) => item.value)).toEqual([
+      "gpt-flagship",
+      "gpt-economy",
+    ]);
+
+    await controller.submit("/model set gpt-economy");
+    const modelDecision = controller.state.pendingDecision;
+    await controller.confirm(modelDecision!.id, true);
+
+    await controller.submit("/variant");
+    expect(controller.state.overlay?.title).toBe("Choose model variant");
+    expect(controller.state.overlay?.items?.map((item) => item.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("confirms provider login before handing terminal control to the provider", async () => {
+    const engine = new FakeEngine();
+    const login = vi.fn(async () => {});
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+      loginProvider: login,
+    });
+    await controller.start();
+
+    await controller.submit("/provider login codex");
+    expect(login).not.toHaveBeenCalled();
+    const decision = controller.state.pendingDecision;
+    expect(decision?.title).toBe("Authenticate Codex CLI?");
+
+    await controller.confirm(decision!.id, true);
+    expect(login).toHaveBeenCalledWith("codex");
+    expect(controller.state.transcript.at(-1)?.body).toContain(
+      "authentication verified",
+    );
   });
 
   it("clears the in-memory transcript without writing session data", async () => {

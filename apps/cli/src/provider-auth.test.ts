@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { providerAuthPlan } from "./provider-auth.js";
+import { providerAuthPlan, providerAuthStatusPlan } from "./provider-auth.js";
 
 describe("providerAuthPlan", () => {
   it("delegates Codex authentication to the official CLI", () => {
@@ -7,6 +7,17 @@ describe("providerAuthPlan", () => {
       command: "codex",
       args: ["login"],
       experimental: false,
+    });
+  });
+
+  it("verifies authentication with the provider-owned status command", () => {
+    expect(providerAuthStatusPlan("codex")).toEqual({
+      command: "codex",
+      args: ["login", "status"],
+    });
+    expect(providerAuthStatusPlan("opencode")).toEqual({
+      command: "opencode",
+      args: ["auth", "list"],
     });
   });
 

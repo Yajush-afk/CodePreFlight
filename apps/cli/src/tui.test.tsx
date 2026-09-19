@@ -4,6 +4,20 @@ import { describe, expect, it } from "vitest";
 import { SessionView } from "./tui.js";
 
 describe("SessionView", () => {
+  it("clears the Ink frame while a provider owns the terminal", () => {
+    const view = render(
+      <SessionView
+        state={{ started: true, busy: true, shouldExit: false, transcript: [] }}
+        input=""
+        onInput={() => {}}
+        onSubmit={() => {}}
+        terminalHandoff
+      />,
+    );
+
+    expect(view.lastFrame()).toBe("");
+  });
+
   it("renders repository context, conversation, and a persistent composer", () => {
     const view = render(
       <SessionView
