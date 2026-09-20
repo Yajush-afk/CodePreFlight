@@ -90,7 +90,7 @@ def test_opencode_without_any_credentials_requires_authentication(
         if command == ["opencode", "--version"]:
             return completed(command, "1.0\n")
         if command == ["opencode", "run", "--help"]:
-            return completed(command, "--format --dir --pure\n")
+            return completed(command, " ".join(providers.REQUIRED_FLAGS["opencode"]))
         if command == ["opencode", "auth", "list"]:
             return completed(command, "Credentials ~/.local/share/opencode/auth.json\n")
         return completed(command, returncode=1)
@@ -116,7 +116,7 @@ def test_authenticated_opencode_requires_explicit_standard_model(
         if command == ["opencode", "--version"]:
             return completed(command, "1.0\n")
         if command == ["opencode", "run", "--help"]:
-            return completed(command, "--format --dir --pure\n")
+            return completed(command, " ".join(providers.REQUIRED_FLAGS["opencode"]))
         if command == ["opencode", "auth", "list"]:
             return completed(command, "● OpenAI oauth\n")
         return completed(command, returncode=1)

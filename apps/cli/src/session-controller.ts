@@ -106,6 +106,7 @@ interface ProviderView {
   id?: string;
   name?: string;
   availability?: string;
+  readiness?: { state: string; invocationVerified: boolean };
   authentication?: string;
   model?: string;
   model_name?: string | null;
@@ -508,7 +509,10 @@ export class SessionController {
         conflicts: snapshot.conflicts?.length ?? 0,
         provider: selected?.name ?? "Not configured",
         providerId: selected?.id,
-        providerAvailability: selected?.availability,
+        providerAvailability:
+          selected?.readiness?.state === "action_required"
+            ? "Action required"
+            : (selected?.readiness?.state ?? selected?.availability),
         providerAuthentication: selected?.authentication,
         providerModel:
           selected?.model_name ??
@@ -768,7 +772,7 @@ export class SessionController {
     const body = this.providers
       .map(
         (provider) =>
-          `${provider.id === this.activeProviderId ? "●" : "○"} ${provider.name ?? provider.id} · ${provider.availability ?? "unknown"} · ${provider.authentication ?? "unknown"}` +
+          `${provider.id === this.activeProviderId ? "●" : "○"} ${provider.name ?? provider.id} · ${provider.readiness?.state?.replace("action_required", "Action required") ?? provider.availability ?? "unknown"}` +
           `${provider.model_name ? ` · ${provider.model_name}` : ""}` +
           `${provider.detail ? `\n  ${provider.detail}` : ""}`,
       )
@@ -787,7 +791,7 @@ export class SessionController {
         kind: "providers",
         title: "Review providers",
         items: this.providers.map((provider) => ({
-          label: `${provider.id === this.activeProviderId ? "●" : "○"} ${provider.name ?? provider.id} · ${provider.availability ?? "unknown"}`,
+          label: `${provider.id === this.activeProviderId ? "●" : "○"} ${provider.name ?? provider.id} · ${provider.readiness?.state?.replace("action_required", "Action required") ?? provider.availability ?? "unknown"}`,
           value: provider.id ?? "unknown",
           command: `/provider use ${provider.id ?? ""}${provider.model_name ? ` ${provider.model_name}` : ""}`,
         })),
