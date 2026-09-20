@@ -13,7 +13,6 @@ from .cache import ReviewCache
 from .config import load_config
 from .context import ContextBuilder
 from .errors import CodePreflightError
-from .finding_schema import parse_provider_response, provider_output_schema
 from .git import GitRunner
 from .models import (
     BlastRadiusItem,
@@ -25,6 +24,8 @@ from .models import (
     VerificationState,
 )
 from .readiness import ProviderHealth, require_review_ready
+from .review_consent import require_review_consent
+from .review_invocation import ReviewInvocation
 from .trust import is_trusted
 from .verification import FindingVerifier
 
@@ -106,10 +107,7 @@ class ReviewOrchestrator:
             )
         blast_radius = BlastRadiusAnalyzer().analyze(root, context.changed_files)
         depth = str(payload.get("depth") or self._default_depth(target))
-        if depth not in DEPTH_FOCUS:
-            raise CodePreflightError(
-                "unsupported_review_depth", f"Unsupported review depth: {depth}"
-            )
+        self._validate_depth(depth)
         fingerprint = self._fingerprint(
             context.content,
             provider.model_dump(mode="json"),
@@ -125,76 +123,25 @@ class ReviewOrchestrator:
                 emit("progress", {"message": "Using cached review for unchanged repository state"})
                 return cached
 
-        emit(
-            "consent_required",
-            {
-                "provider": provider.model_dump(mode="json"),
-                "contextCharacters": context.manifest.total_characters,
-                "redactions": context.manifest.redactions,
-                "manifest": context.manifest.model_dump(mode="json"),
-                "destination": {
-                    "kind": provider.kind.value,
-                    "remote": provider.sends_code_remotely,
-                },
-            },
-        )
-        hook_approval = bool(payload.get("hook")) and bool(
-            config.get("hooks", {}).get("remote_provider_approved", False)
-        )
-        if provider.sends_code_remotely and not (
-            bool(payload.get("remoteApproved")) or hook_approval
-        ):
-            raise CodePreflightError(
-                "provider_consent_required",
-                f"{provider.name} may send code remotely; rerun with --approve "
-                "after reviewing the disclosure",
-                recoverable=True,
-            )
-
+        require_review_consent(provider, context, config, payload, emit)
         emit("progress", {"message": f"Requesting review from {provider.name}"})
         emit("workflow_stage", {"stage": "provider", "actor": "Provider"})
-        health = ProviderHealth(root)
-        health.invalidate(provider)
-        try:
-            raw_output = adapter.review(
-                self._prompt(context.content, depth, blast_radius), provider_output_schema()
+        response = ReviewInvocation(adapter, root).run(
+            self._prompt(context.content, depth, blast_radius), emit
+        )
+        if isinstance(response, ReviewFailure):
+            return ReviewResult(
+                provider=provider,
+                summary="Provider review failed structured-output validation.",
+                findings=[],
+                rejected_findings=0,
+                context=context,
+                blocking=False,
+                fingerprint=fingerprint,
+                blast_radius=blast_radius,
+                status="failed",
+                failure=response,
             )
-        except Exception:
-            health.invalidate(provider)
-            raise
-        emit("provider_delta", {"characters": len(raw_output)})
-        try:
-            response = parse_provider_response(raw_output)
-        except CodePreflightError as error:
-            if error.code != "provider_output_invalid":
-                raise
-            emit("progress", {"message": "Repairing malformed structured provider output"})
-            repaired_output = adapter.review(
-                self._repair_prompt(raw_output), provider_output_schema()
-            )
-            emit("provider_delta", {"characters": len(repaired_output), "repair": True})
-            try:
-                response = parse_provider_response(repaired_output)
-            except CodePreflightError as repair_error:
-                if repair_error.code != "provider_output_invalid":
-                    raise
-                return ReviewResult(
-                    provider=provider,
-                    summary="Provider review failed structured-output validation.",
-                    findings=[],
-                    rejected_findings=0,
-                    context=context,
-                    blocking=False,
-                    fingerprint=fingerprint,
-                    blast_radius=blast_radius,
-                    status="failed",
-                    failure=ReviewFailure(
-                        code="provider_output_invalid",
-                        message=str(repair_error),
-                        provider_response=repaired_output[-12_000:],
-                        attempts=2,
-                    ),
-                )
 
         emit("progress", {"message": "Verifying provider findings against the repository"})
         emit("workflow_stage", {"stage": "verify", "actor": "Preflight"})
@@ -220,7 +167,7 @@ class ReviewOrchestrator:
         )
         if bool(config.get("cache", {}).get("enabled", True)):
             cache.put(result)
-        health.record(provider, config)
+        ProviderHealth(root).record(provider, config)
         return result
 
     def _prompt(self, context: str, depth: str, blast_radius: list[BlastRadiusItem]) -> str:
@@ -243,6 +190,12 @@ class ReviewOrchestrator:
             + context
             + ("\n\n## Local blast-radius signals\n" + blast if blast else "")
         )
+
+    def _validate_depth(self, depth: str) -> None:
+        if depth not in DEPTH_FOCUS:
+            raise CodePreflightError(
+                "unsupported_review_depth", f"Unsupported review depth: {depth}"
+            )
 
     def _repair_prompt(self, malformed_output: str) -> str:
         return (

@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
+import { Box, Text } from "ink";
 import TextInput from "ink-text-input";
 import SelectInput from "ink-select-input";
-import { loginProvider } from "./provider-auth.js";
+import { useWorkspaceInput } from "./workspace-input.js";
+import {
+  useWorkspaceSession,
+  useWorkspaceDimensions,
+  useCommandSuggestions,
+} from "./workspace-hooks.js";
 import {
   SessionController,
   type SessionState,
@@ -285,180 +290,31 @@ export function SessionView({
   );
 }
 
-export function App({
-  repositoryPath,
-  controller: supplied,
-  terminal,
-}: AppProps): React.JSX.Element {
-  const { exit } = useApp();
-  const { setRawMode } = useStdin();
-  const { stdout } = useStdout();
-  const [terminalHandoff, setTerminalHandoff] = useState(false);
-  const [controller] = useState(
-    () =>
-      supplied ??
-      new SessionController({
-        repositoryPath,
-        loginProvider: async (provider) => {
-          setTerminalHandoff(true);
-          await new Promise<void>((resolve) => setImmediate(resolve));
-          setRawMode(false);
-          terminal?.suspend();
-          try {
-            await loginProvider(provider);
-          } finally {
-            terminal?.resume();
-            setRawMode(true);
-            setTerminalHandoff(false);
-          }
-        },
-      }),
-  );
-  const [state, setState] = useState<SessionState>(controller.state);
+export function App(options: AppProps): React.JSX.Element {
+  const { controller, state, terminalHandoff, exit } =
+    useWorkspaceSession(options);
   const [input, setInput] = useState("");
   const [scrollOffset, setScrollOffset] = useState(0);
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [suggestionIndex, setSuggestionIndex] = useState(0);
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
-  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
-
-  useEffect(() => {
-    if (terminal) terminal.onExit = () => controller.dispose();
-    let current = true;
-    if (!input.startsWith("/") || suggestionsDismissed) {
-      setSuggestions([]);
-      setSuggestionsLoading(false);
-      return;
-    }
-    setSuggestionsLoading(true);
-    void controller
-      .suggest(input)
-      .then((items) => {
-        if (current) {
-          setSuggestions(items.slice(0, 6));
-          setSuggestionIndex(0);
-        }
-      })
-      .catch(() => {
-        if (current) setSuggestions([]);
-      })
-      .finally(() => {
-        if (current) setSuggestionsLoading(false);
-      });
-    return () => {
-      current = false;
-    };
-  }, [input, controller, suggestionsDismissed]);
+  const palette = useCommandSuggestions(input, controller);
+  const dimensions = useWorkspaceDimensions();
   useEffect(
     () => setScrollOffset(0),
     [state.overlay?.title, state.pendingDecision?.id],
   );
-  const [dimensions, setDimensions] = useState({
-    width: stdout.columns ?? 100,
-    height: stdout.rows ?? 40,
+  useWorkspaceInput({
+    controller,
+    state,
+    input,
+    terminalHandoff,
+    exit,
+    setInput,
+    setScrollOffset,
+    ...palette,
   });
-
-  useEffect(() => {
-    const unsubscribe = controller.subscribe(setState);
-    void controller.start();
-    return () => {
-      unsubscribe();
-      controller.dispose();
-    };
-  }, [controller]);
-
-  useEffect(() => {
-    if (state.shouldExit) exit();
-  }, [state.shouldExit, exit]);
-
-  useEffect(() => {
-    const resize = (): void =>
-      setDimensions({
-        width: stdout.columns ?? 100,
-        height: stdout.rows ?? 40,
-      });
-    stdout.on("resize", resize);
-    return () => {
-      stdout.off("resize", resize);
-    };
-  }, [stdout]);
-
-  useInput(
-    (value, key) => {
-      if (key.ctrl && value === "c") {
-        controller.dispose();
-        exit();
-        return;
-      }
-      if (
-        (suggestions.length || suggestionsLoading) &&
-        !state.overlay &&
-        !state.pendingDecision
-      ) {
-        if (key.escape) {
-          setSuggestions([]);
-          setSuggestionsDismissed(true);
-          return;
-        }
-        if (!suggestions.length) return;
-        if (key.upArrow) {
-          setSuggestionIndex(
-            (index) => (index + suggestions.length - 1) % suggestions.length,
-          );
-          return;
-        }
-        if (key.downArrow) {
-          setSuggestionIndex((index) => (index + 1) % suggestions.length);
-          return;
-        }
-        if (key.tab) {
-          setInput(suggestions[suggestionIndex]!.completion);
-          return;
-        }
-      }
-      if (key.escape) {
-        if (state.overlay) {
-          void controller.submit("/close");
-          return;
-        }
-        if (input) {
-          setInput("");
-          return;
-        }
-        if (state.pendingDecision) {
-          void controller.confirm(state.pendingDecision.id, false);
-          return;
-        }
-        controller.interrupt();
-        return;
-      }
-      if (key.pageUp)
-        setScrollOffset((offset) =>
-          state.overlay || state.pendingDecision
-            ? Math.max(0, offset - 5)
-            : offset + 5,
-        );
-      if (key.pageDown)
-        setScrollOffset((offset) =>
-          state.overlay || state.pendingDecision
-            ? offset + 5
-            : Math.max(0, offset - 5),
-        );
-      if (!state.overlay && !state.pendingDecision && !state.busy) {
-        if (key.upArrow) setInput(controller.history("previous"));
-        if (key.downArrow) setInput(controller.history("next"));
-      }
-      if (state.pendingDecision && (value === "y" || value === "n")) {
-        void controller.confirm(state.pendingDecision.id, value === "y");
-      }
-    },
-    { isActive: !terminalHandoff },
-  );
-
   const submit = (value: string): void => {
     if (state.busy) return;
     setScrollOffset(0);
-    const choice = suggestions[suggestionIndex];
+    const choice = palette.suggestions[palette.suggestionIndex];
     if (!state.overlay && choice) {
       if (choice.disabled) return;
       if (choice.argument) {
@@ -467,33 +323,32 @@ export function App({
       }
       value = choice.completion;
     }
-    setSuggestions([]);
+    palette.setSuggestions([]);
     setInput("");
     void controller.submit(value);
   };
-
   return (
     <SessionView
       state={state}
       input={input}
       onInput={(value) => {
-        setSuggestionsDismissed(false);
+        palette.setSuggestionsDismissed(false);
         setInput(value);
       }}
       onSubmit={submit}
       onSelect={(action) => {
         void controller.select(action);
       }}
-      suggestions={suggestions}
-      suggestionIndex={suggestionIndex}
-      suggestionsLoading={suggestionsLoading}
+      suggestions={palette.suggestions}
+      suggestionIndex={palette.suggestionIndex}
+      suggestionsLoading={palette.suggestionsLoading}
       terminalWidth={dimensions.width}
       terminalHeight={dimensions.height}
       colorEnabled={!process.env.NO_COLOR}
       terminalHandoff={terminalHandoff}
-      fullscreen={terminal?.enabled}
+      fullscreen={options.terminal?.enabled}
       animate={
-        interactiveEffects(Boolean(stdout.isTTY)) &&
+        interactiveEffects(dimensions.isTTY) &&
         process.env.PREFLIGHT_NO_ANIMATION !== "1"
       }
       scrollOffset={scrollOffset}

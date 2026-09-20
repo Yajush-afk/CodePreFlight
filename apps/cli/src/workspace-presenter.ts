@@ -1,6 +1,45 @@
-import type { SessionHeader, TranscriptEntry } from "./session-controller.js";
+import type {
+  SessionHeader,
+  TranscriptEntry,
+  SessionOverlayItem,
+} from "./session-controller.js";
 
 export class WorkspacePresenter {
+  navigationItems(
+    action: "tree" | "branches" | "commits",
+    items: Array<Record<string, unknown>>,
+  ): SessionOverlayItem[] {
+    const presenters = {
+      tree: this.fileItem,
+      branches: this.branchItem,
+      commits: this.commitItem,
+    };
+    return items.map((item) => presenters[action](item));
+  }
+  private fileItem(item: Record<string, unknown>): SessionOverlayItem {
+    const path = String(item.path ?? "");
+    return {
+      label: `${String(item.status ?? "clean").padEnd(16)} ${path}`,
+      value: path,
+      action: { kind: "file", value: path },
+    };
+  }
+  private branchItem(item: Record<string, unknown>): SessionOverlayItem {
+    const branch = String(item.name ?? "");
+    return {
+      label: `${item.current ? "●" : "○"} ${branch} · ${String(item.subject ?? "")}`,
+      value: branch,
+      action: { kind: item.current ? "close" : "branch", value: branch },
+    };
+  }
+  private commitItem(item: Record<string, unknown>): SessionOverlayItem {
+    const revision = String(item.oid ?? "");
+    return {
+      label: `${item.merge ? "merge " : ""}${String(item.shortOid ?? "")} · ${String(item.subject ?? "")}`,
+      value: revision,
+      action: { kind: "commit", value: revision },
+    };
+  }
   transcript(
     entries: TranscriptEntry[],
     width: number,

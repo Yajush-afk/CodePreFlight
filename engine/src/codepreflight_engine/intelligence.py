@@ -322,13 +322,8 @@ class RepositoryIntelligence:
                 continue
             if not path.exists():
                 continue
-            if item.line:
-                try:
-                    line_count = len(path.read_text(encoding="utf-8").splitlines())
-                except (OSError, UnicodeDecodeError):
-                    continue
-                if item.line > line_count:
-                    continue
+            if item.line and not self._valid_evidence_line(path, item.line):
+                continue
             if item.commit and (
                 git.run("cat-file", "-e", f"{item.commit}^{{commit}}", check=False).returncode != 0
             ):
@@ -351,3 +346,9 @@ class RepositoryIntelligence:
                     continue
             verified.append(item)
         return verified
+
+    def _valid_evidence_line(self, path: Path, line: int) -> bool:
+        try:
+            return 0 < line <= len(path.read_text(encoding="utf-8").splitlines())
+        except (OSError, UnicodeDecodeError):
+            return False

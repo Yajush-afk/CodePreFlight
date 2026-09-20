@@ -36,12 +36,7 @@ interface ReviewView {
 export function printReview(value: unknown): void {
   const review = value as ReviewView;
   process.stdout.write(`Provider: ${review.provider?.name ?? "unknown"}\n`);
-  if (review.status === "failed") {
-    process.stdout.write(
-      `Review failed: ${review.failure?.message ?? review.failure?.code ?? "invalid provider response"}` +
-        `${review.failure?.attempts ? ` (after ${review.failure.attempts} attempts)` : ""}\n`,
-    );
-  }
+  printReviewFailure(review);
   if (review.cache_hit)
     process.stdout.write("Cache: hit (repository content was not persisted)\n");
   process.stdout.write(
@@ -57,21 +52,7 @@ export function printReview(value: unknown): void {
   process.stdout.write(
     `Findings: ${findings.length}${review.rejected_findings ? ` · ${review.rejected_findings} rejected during verification` : ""}\n`,
   );
-  for (const finding of findings) {
-    const evidence = finding.evidence?.[0];
-    process.stdout.write(
-      `\n${finding.severity?.toUpperCase()} · ${finding.title}\n` +
-        `${evidence?.path ?? "unknown"}:${evidence?.start_line ?? "?"}-${evidence?.end_line ?? "?"}\n` +
-        `${finding.impact}\n` +
-        `Confidence: ${finding.confidence} · Verification: ${finding.verification}\n` +
-        `Inspect: ${finding.recommendation}\n`,
-    );
-    if (finding.suggested_tests?.length) {
-      process.stdout.write(
-        `Suggested tests: ${finding.suggested_tests.join("; ")}\n`,
-      );
-    }
-  }
+  for (const finding of findings) printFinding(finding);
   if (review.blocking) process.stdout.write("\nReview policy: blocking\n");
   if (review.blast_radius?.length) {
     process.stdout.write("\nPotential blast radius\n");
@@ -80,6 +61,32 @@ export function printReview(value: unknown): void {
         `- ${item.path}: ${item.relationship} (${item.confidence}) · ${item.evidence}\n`,
       );
     }
+  }
+}
+
+function printReviewFailure(review: ReviewView): void {
+  if (review.status !== "failed") return;
+  process.stdout.write(
+    `Review failed: ${review.failure?.message ?? review.failure?.code ?? "invalid provider response"}` +
+      `${review.failure?.attempts ? ` (after ${review.failure.attempts} attempts)` : ""}\n`,
+  );
+}
+
+function printFinding(
+  finding: NonNullable<ReviewView["findings"]>[number],
+): void {
+  const evidence = finding.evidence?.[0];
+  process.stdout.write(
+    `\n${finding.severity?.toUpperCase()} · ${finding.title}\n` +
+      `${evidence?.path ?? "unknown"}:${evidence?.start_line ?? "?"}-${evidence?.end_line ?? "?"}\n` +
+      `${finding.impact}\n` +
+      `Confidence: ${finding.confidence} · Verification: ${finding.verification}\n` +
+      `Inspect: ${finding.recommendation}\n`,
+  );
+  if (finding.suggested_tests?.length) {
+    process.stdout.write(
+      `Suggested tests: ${finding.suggested_tests.join("; ")}\n`,
+    );
   }
 }
 

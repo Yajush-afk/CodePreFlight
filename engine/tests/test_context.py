@@ -3,8 +3,35 @@ from pathlib import Path
 import pytest
 from conftest import git
 
-from codepreflight_engine.context import ContextBuilder
+from codepreflight_engine.context import ContextBuilder, ContextPlanner
 from codepreflight_engine.errors import CodePreflightError
+
+
+def test_empty_context_never_runs_checks(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected(*args: object, **kwargs: object) -> None:
+        pytest.fail("Checks must not run for an empty review")
+
+    monkeypatch.setattr("codepreflight_engine.context.CheckRunner.run", unexpected)
+    with pytest.raises(CodePreflightError, match="no staged changes"):
+        ContextBuilder().build(git_repository, {"checks": []})
+
+
+def test_context_planner_does_not_execute_checks(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (git_repository / "feature.py").write_text("value = 1\n")
+    git(git_repository, "add", "feature.py")
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        pytest.fail("Context planning is read-only")
+
+    monkeypatch.setattr("codepreflight_engine.context.CheckRunner.run", unexpected)
+    first = ContextPlanner().plan(git_repository, {})
+    second = ContextPlanner().plan(git_repository, {})
+    assert first.content == second.content
+    assert first.manifest == second.manifest
 
 
 def test_builds_redacted_context_for_staged_change(git_repository: Path) -> None:

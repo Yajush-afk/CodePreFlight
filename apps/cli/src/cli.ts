@@ -26,6 +26,19 @@ import { TerminalSession } from "./terminal-session.js";
 const program = new Command();
 const client = new EngineClient();
 
+function printCommitPreparation(
+  preparation: Record<string, unknown>,
+  json: boolean,
+  proposed = false,
+): void {
+  if (json) printValue(preparation, true);
+  else {
+    printReview(preparation.review);
+    if (proposed)
+      process.stdout.write(`Proposed commit: ${String(preparation.message)}\n`);
+  }
+}
+
 function printProviderDisclosure(event: EngineEvent): void {
   if (event.event !== "consent_required") return;
   const provider = event.payload?.provider as
@@ -1072,8 +1085,7 @@ program
         );
         const review = preparation.review as { blocking?: boolean };
         if (review.blocking && !options.bypassReviewPolicy) {
-          if (options.json) printValue(preparation, true);
-          else printReview(preparation.review);
+          printCommitPreparation(preparation, Boolean(options.json));
           process.stderr.write(
             "Verified findings block this commit; inspect them or pass --bypass-review-policy explicitly.\n",
           );
@@ -1085,13 +1097,7 @@ program
         let approved = Boolean(options.yes);
         if (!approved) {
           if (!process.stdin.isTTY || !process.stdout.isTTY) {
-            if (options.json) printValue(preparation, true);
-            else {
-              printReview(preparation.review);
-              process.stdout.write(
-                `Proposed commit: ${String(preparation.message)}\n`,
-              );
-            }
+            printCommitPreparation(preparation, Boolean(options.json), true);
             process.stderr.write(
               "Interactive approval requires a terminal; use --message and --yes.\n",
             );

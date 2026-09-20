@@ -70,7 +70,12 @@ class EngineConnection {
   ) {
     this.child = this.startEngine();
     this.lines = createInterface({ input: this.child.stdout });
-    this.ready = new Promise((resolveReady, rejectReady) => {
+    this.ready = this.handshake();
+    this.observeProcess();
+  }
+
+  private handshake(): Promise<void> {
+    return new Promise<void>((resolveReady, rejectReady) => {
       const timeout = setTimeout(() => {
         const error = new EngineRequestError(
           "Python engine did not complete the protocol handshake within 5 seconds",
@@ -125,7 +130,9 @@ class EngineConnection {
         this.fail(failure);
       });
     });
+  }
 
+  private observeProcess(): void {
     this.child.stderr.on("data", (chunk: Buffer) => {
       const message = chunk.toString();
       this.diagnostics = (this.diagnostics + message).slice(
