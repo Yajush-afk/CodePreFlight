@@ -6,6 +6,8 @@ import {
 } from "./engine-client.js";
 import type { EngineCommand, EngineEvent } from "./protocol.js";
 import { ActivityStore, type OperationRecord } from "./activity-store.js";
+import { CommandRegistry, type Suggestion } from "./command-registry.js";
+import { SuggestionCoordinator } from "./suggestion-coordinator.js";
 
 export interface SessionEngine {
   request(
@@ -60,7 +62,22 @@ export interface PendingDecision {
 export interface SessionOverlayItem {
   label: string;
   value: string;
-  command: string;
+  command?: string;
+  action?: SessionAction;
+}
+
+export interface SessionAction {
+  kind:
+    | "model"
+    | "variant"
+    | "provider"
+    | "mode"
+    | "file"
+    | "branch"
+    | "commit"
+    | "review"
+    | "close";
+  value: string;
 }
 
 export interface SessionOverlay {
@@ -105,6 +122,7 @@ interface RepositorySnapshot {
 }
 
 interface ProviderView {
+  installation?: string;
   id?: string;
   name?: string;
   availability?: string;
@@ -145,31 +163,6 @@ interface AutomationView {
 type Listener = (state: SessionState) => void;
 type Retry = () => Promise<void>;
 type ProviderLogin = (provider: string) => Promise<void>;
-
-const HELP = [
-  "/status — refresh repository state",
-  "/tree — browse tracked and untracked files",
-  "/branches — inspect and safely switch local branches",
-  "/commits — browse and review reachable commits",
-  "/review staged|commit <revision>|branch|pr — run a focused review",
-  "/pr — detect an open pull request with GitHub CLI",
-  "/mode — choose Manual, Auto, or Auto+ review cadence",
-  "/jobs — inspect background review jobs",
-  "/automation grant|revoke — manage closed-session provider approval",
-  "/scan full — scan a clean synchronized configured base branch",
-  "/commit [message] — review staged changes and confirm a commit",
-  "/provider — inspect provider readiness",
-  "/provider login <id> — launch provider-owned authentication",
-  "/provider use <id> [model] — preview and select a provider",
-  "/provider test <id> — run a synthetic readiness test",
-  "/model — choose the active provider model (standard service tier only)",
-  "/variant — choose the model reasoning variant (/varient is accepted as an alias)",
-  "/help — show commands",
-  "/clear — clear this ephemeral transcript",
-  "/close — close the active browser",
-  "/quit — exit CodePreflight",
-  "Plain text asks a repository-scoped Git or review question.",
-].join("\n");
 
 export class SessionController {
   private currentState: SessionState = {
@@ -213,6 +206,11 @@ export class SessionController {
 
   private readonly engine: SessionEngine;
   private readonly activityStore = new ActivityStore();
+  private readonly commands = new CommandRegistry();
+  private readonly suggestions = new SuggestionCoordinator(
+    this.commands,
+    (command) => this.loadArguments(command),
+  );
 
   get state(): SessionState {
     return this.currentState;
@@ -329,153 +327,207 @@ export class SessionController {
   }
 
   private async runCommand(value: string): Promise<void> {
-    const [command, ...args] = value.slice(1).split(/\s+/);
-    if (command !== "review" && command !== "scan") {
+    const correction = this.commands.correction(value);
+    if (correction) {
+      this.requestDecision(
+        "Command renamed",
+        `Use ${correction} instead.`,
+        "use corrected command",
+        async () => this.runCommand(correction),
+      );
+      return;
+    }
+    const { name, argument } = this.commands.parse(value);
+    if (!name.startsWith("review") && name !== "scanfull")
       this.patch({ pipeline: undefined });
-    }
-    if (command === "quit" || command === "exit") {
-      this.patch({ shouldExit: true });
-      return;
-    }
-    if (command === "help") {
-      this.patch({
-        overlay: { kind: "help", title: "Commands and questions", body: HELP },
+    const handlers: Record<string, () => void | Promise<void>> = {
+      quit: () => this.patch({ shouldExit: true }),
+      help: () =>
+        this.patch({
+          overlay: {
+            kind: "help",
+            title: "Commands and questions",
+            body: this.commands.help(),
+          },
+        }),
+      close: () => this.patch({ overlay: undefined }),
+      status: () =>
+        this.runBusy("Refreshing repository status…", async () => {
+          await this.refreshContext();
+          await this.observeAutomationEvent("refresh");
+          this.appendStatus();
+        }),
+      files: () => this.openWorkspace("tree"),
+      branches: () => this.openWorkspace("branches"),
+      commits: () => this.openWorkspace("commits"),
+      file: () => this.previewFile(argument),
+      switchbranch: () => this.previewSwitch(argument),
+      pr: () => this.detectPullRequest(),
+      review: () => this.openReviewPicker(),
+      reviewstaged: () => this.review("staged"),
+      reviewbranch: () => this.review("branch"),
+      reviewpr: () => this.review("pull_request"),
+      reviewcommit: () =>
+        argument
+          ? this.review("commit", argument)
+          : this.openWorkspace("commits"),
+      scanfull: () => this.fullScan(false),
+      commit: () => this.commit(argument || undefined),
+      provider: () => this.openProviders(),
+      model: () => this.openModels(),
+      variant: () => this.openVariants(),
+      providerlogin: () =>
+        argument ? this.confirmLogin(argument) : this.openProviders(),
+      providerswitch: () =>
+        argument ? this.configureProvider(argument) : this.openProviders(),
+      providertest: () =>
+        this.confirmProviderTest(argument || this.activeProviderId || ""),
+      mode: () => this.openModes(),
+      jobs: () => this.appendJobs(),
+      automationgrant: () => this.configureGrant(false),
+      automationrevoke: () => this.configureGrant(true),
+      activity: () =>
+        this.patch({
+          overlay: {
+            kind: "preview",
+            title: "Session activity",
+            body: this.activityStore.describe(),
+          },
+        }),
+    };
+    const handler = handlers[name];
+    if (handler) await handler();
+    else
+      this.append({
+        kind: "error",
+        title: "Unknown command",
+        body: `/${name} is unavailable. Use /help.`,
       });
-      return;
-    }
-    if (command === "activity") {
-      this.patch({
-        overlay: {
-          kind: "preview",
-          title: "Session activity",
-          body: this.activityStore.describe(),
-        },
-      });
-      return;
-    }
-    if (command === "close") {
-      this.patch({ overlay: undefined });
-      return;
-    }
-    if (command === "status") {
-      await this.runBusy("Refreshing repository status…", async () => {
-        await this.refreshContext();
-        await this.observeAutomationEvent("refresh");
-        this.appendStatus();
-      });
-      return;
-    }
-    if (command === "review") {
-      const target = args[0] ?? "staged";
-      if (
-        !(["staged", "commit", "branch", "pr"] as string[]).includes(target)
-      ) {
-        this.append({
-          kind: "error",
-          title: "Unknown review target",
-          body: "Use /review staged, /review commit <revision>, /review branch, or /review pr.",
-        });
-        return;
-      }
-      if (target === "commit" && !args[1]) {
-        this.append({
-          kind: "error",
-          title: "Commit required",
-          body: "Select a commit with /commits or pass /review commit <revision>.",
-        });
-        return;
-      }
-      await this.review(target === "pr" ? "pull_request" : target, args[1]);
-      return;
-    }
-    if (command === "tree" || command === "branches" || command === "commits") {
-      await this.openWorkspace(command);
-      return;
-    }
-    if (command === "file" && args[0]) {
-      await this.previewFile(decodeURIComponent(args[0]));
-      return;
-    }
-    if (command === "switch" && args[0]) {
-      await this.previewSwitch(decodeURIComponent(args[0]));
-      return;
-    }
-    if (command === "pr") {
-      await this.detectPullRequest();
-      return;
-    }
-    if (command === "mode") {
-      if (args[0] === "set" && args[1]) await this.configureMode(args[1]);
-      else this.openModes();
-      return;
-    }
-    if (command === "jobs") {
-      this.appendJobs();
-      return;
-    }
-    if (command === "automation") {
-      if (args[0] === "grant") await this.configureGrant(false);
-      else if (args[0] === "revoke") await this.configureGrant(true);
-      else {
-        this.append({
-          kind: "error",
-          title: "Automation command",
-          body: "Use /automation grant or /automation revoke.",
-        });
-      }
-      return;
-    }
-    if (command === "scan" && args[0] === "full") {
-      await this.fullScan(false);
-      return;
-    }
-    if (command === "commit") {
-      await this.commit(args.length ? args.join(" ") : undefined);
-      return;
-    }
-    if (command === "provider") {
-      if (args[0] === "login" && args[1]) {
-        this.confirmLogin(args[1]);
-      } else if (args[0] === "use" && args[1]) {
-        await this.configureProvider(args[1], args[2]);
-      } else if (args[0] === "test" && args[1]) {
-        this.requestDecision(
-          `Test ${args[1]}?`,
-          "This sends synthetic code only, but may consume provider usage.",
-          "run smoke test",
-          async () => this.testProvider(args[1]),
+  }
+
+  private confirmProviderTest(provider: string): void {
+    this.requestDecision(
+      `Test ${provider}?`,
+      "Synthetic code only; this may consume provider usage.",
+      "run smoke test",
+      async () => this.testProvider(provider),
+    );
+  }
+
+  private openReviewPicker(): void {
+    this.patch({
+      overlay: {
+        kind: "preview",
+        title: "What would you like to review?",
+        items: ["staged", "branch", "commit", "pull_request"].map((target) => ({
+          label: target === "pull_request" ? "Existing PR" : target,
+          value: target,
+          action: { kind: "review", value: target },
+        })),
+      },
+    });
+  }
+
+  async select(action: SessionAction): Promise<void> {
+    if (this.currentState.busy || this.currentState.pendingDecision) return;
+    this.patch({ overlay: undefined });
+    const handlers: Record<SessionAction["kind"], () => void | Promise<void>> =
+      {
+        model: () =>
+          this.configureProvider(this.activeProviderId ?? "", action.value),
+        variant: () =>
+          this.configureProvider(
+            this.activeProviderId ?? "",
+            this.activeProvider()?.model_name ?? undefined,
+            action.value,
+          ),
+        provider: () => this.configureProvider(action.value),
+        mode: () => this.configureMode(action.value),
+        file: () => this.previewFile(action.value),
+        branch: () => this.previewSwitch(action.value),
+        commit: () => this.review("commit", action.value),
+        review: () =>
+          action.value === "commit"
+            ? this.openWorkspace("commits")
+            : this.review(action.value),
+        close: () => {},
+      };
+    await handlers[action.kind]();
+  }
+
+  async suggest(input: string): Promise<Suggestion[]> {
+    const items = await this.suggestions.suggest(input);
+    const provider = this.activeProvider();
+    return items.map((item) => {
+      const requiresAI =
+        item.value.startsWith("review") || item.value === "scanfull";
+      const ready = provider?.readiness?.state ?? provider?.availability;
+      const disabled =
+        requiresAI && ready !== "ready"
+          ? "Reviewer unavailable · /provider to fix"
+          : item.value === "scanfull" &&
+              !provider?.readiness?.invocationVerified
+            ? "Test your reviewer first · /providertest"
+            : undefined;
+      return { ...item, disabled };
+    });
+  }
+
+  private async loadArguments(command: string): Promise<Suggestion[]> {
+    if (command.startsWith("provider")) {
+      const providers = this.providers.filter(
+        (item) => item.installation !== "missing",
+      );
+      providers.sort(
+        (a, b) =>
+          Number(b.id === this.activeProviderId) -
+          Number(a.id === this.activeProviderId),
+      );
+      if (command === "providerlogin")
+        providers.sort(
+          (a, b) =>
+            Number(b.authentication === "required") -
+            Number(a.authentication === "required"),
         );
-      } else this.openProviders();
-      return;
+      return providers.map((item) => ({
+        value: item.id ?? "",
+        label: item.name ?? item.id ?? "",
+        context: `${item.readiness?.state ?? item.availability} · ${item.authentication}`,
+        completion: `/${command} ${item.id}`,
+      }));
     }
-    if (command === "model") {
-      if (args[0] === "set" && args[1]) {
-        await this.configureProvider(
-          this.activeProviderId ?? "",
-          decodeURIComponent(args[1]),
-        );
-      } else await this.openModels();
-      return;
-    }
-    if (command === "variant" || command === "varient") {
-      if (args[0] === "set" && args[1]) {
-        const provider = this.activeProvider();
-        await this.configureProvider(
-          provider?.id ?? "",
-          provider?.model_name ?? undefined,
-          decodeURIComponent(args[1]),
-        );
-      } else await this.openVariants();
-      return;
-    }
-    this.append({
-      kind: "error",
-      title: "Unknown command",
-      body: `/${command} is not available. Use /help to see supported commands.`,
+    const action =
+      command === "reviewcommit"
+        ? "commits"
+        : command === "switchbranch"
+          ? "branches"
+          : "tree";
+    const result = await this.engine.request(
+      "workspace",
+      this.options.repositoryPath,
+      { action },
+    );
+    const items = (result.items ?? []) as Array<Record<string, unknown>>;
+    const eligible = items.filter(
+      (item) => action !== "branches" || !item.current,
+    );
+    if (action === "tree")
+      eligible.sort(
+        (a, b) => Number(a.status === "clean") - Number(b.status === "clean"),
+      );
+    return eligible.map((item) => {
+      const value = String(item.oid ?? item.name ?? item.path ?? "");
+      return {
+        value,
+        label: String(item.shortOid ?? value),
+        context: String(item.subject ?? item.status ?? ""),
+        completion: `/${command} ${value}`,
+      };
     });
   }
 
   private async refreshContext(): Promise<void> {
+    this.suggestions.invalidate();
     const request = this.beginRequest();
     const [status, providerResult, automationResult] = await Promise.all([
       this.engine.request(
@@ -564,7 +616,7 @@ export class SessionController {
         ].map(([mode, label]) => ({
           label: `${mode === selected ? "●" : "○"} ${label}`,
           value: mode,
-          command: `/mode set ${mode}`,
+          action: { kind: "mode", value: mode },
         })),
       },
     });
@@ -597,7 +649,7 @@ export class SessionController {
             this.append({
               kind: "system",
               title: "Review mode updated",
-              body: `${String(result.mode)} is active.${mode === "manual" ? "" : " Approve an automation grant with /automation grant before closed-session provider use."}`,
+              body: `${String(result.mode)} is active.${mode === "manual" ? "" : " Approve an automation grant with /automationgrant before closed-session provider use."}`,
             });
           });
         },
@@ -780,10 +832,10 @@ export class SessionController {
     if (!header.providerId || header.providerAvailability !== "ready")
       actions.push("/provider");
     if (header.conflicts) actions.push("resolve conflicts, then /status");
-    else if (header.staged) actions.push("/review staged");
-    else if (header.unstaged || header.untracked) actions.push("/tree");
-    else if (header.ahead) actions.push("/review branch");
-    else if (header.branch === header.baseBranch) actions.push("/scan full");
+    else if (header.staged) actions.push("/reviewstaged");
+    else if (header.unstaged || header.untracked) actions.push("/files");
+    else if (header.ahead) actions.push("/reviewbranch");
+    else if (header.branch === header.baseBranch) actions.push("/scanfull");
     if (actions.length < 2) actions.push("/commits");
     return actions.slice(0, 3);
   }
@@ -813,7 +865,7 @@ export class SessionController {
         items: this.providers.map((provider) => ({
           label: `${provider.id === this.activeProviderId ? "●" : "○"} ${provider.name ?? provider.id} · ${provider.readiness?.state?.replace("action_required", "Action required") ?? provider.availability ?? "unknown"}`,
           value: provider.id ?? "unknown",
-          command: `/provider use ${provider.id ?? ""}${provider.model_name ? ` ${provider.model_name}` : ""}`,
+          action: { kind: "provider", value: provider.id ?? "" },
         })),
       },
     });
@@ -857,7 +909,7 @@ export class SessionController {
             return {
               label: `${model === provider.model_name ? "●" : "○"} ${label}${description ? ` · ${description}` : ""}`,
               value: model,
-              command: `/model set ${encodeURIComponent(model)}`,
+              action: { kind: "model", value: model },
             };
           }),
         },
@@ -898,7 +950,7 @@ export class SessionController {
           items: variants.map((variant) => ({
             label: `${variant === provider.variant_name ? "●" : "○"} ${variant}`,
             value: variant,
-            command: `/variant set ${encodeURIComponent(variant)}`,
+            action: { kind: "variant", value: variant },
           })),
         },
       });
@@ -923,32 +975,35 @@ export class SessionController {
       );
       const raw =
         (result.items as Array<Record<string, unknown>> | undefined) ?? [];
-      const items = raw.map((item) => {
-        if (action === "tree") {
-          const path = String(item.path ?? "");
+      const items: SessionOverlayItem[] = raw.map(
+        (item): SessionOverlayItem => {
+          if (action === "tree") {
+            const path = String(item.path ?? "");
+            return {
+              label: `${String(item.status ?? "clean").padEnd(16)} ${path}`,
+              value: path,
+              action: { kind: "file", value: path },
+            };
+          }
+          if (action === "branches") {
+            const branch = String(item.name ?? "");
+            return {
+              label: `${item.current ? "●" : "○"} ${branch} · ${String(item.subject ?? "")}`,
+              value: branch,
+              action: {
+                kind: item.current ? "close" : "branch",
+                value: branch,
+              },
+            };
+          }
+          const revision = String(item.oid ?? "");
           return {
-            label: `${String(item.status ?? "clean").padEnd(16)} ${path}`,
-            value: path,
-            command: `/file ${encodeURIComponent(path)}`,
+            label: `${item.merge ? "merge " : ""}${String(item.shortOid ?? "")} · ${String(item.subject ?? "")}`,
+            value: revision,
+            action: { kind: "commit", value: revision },
           };
-        }
-        if (action === "branches") {
-          const branch = String(item.name ?? "");
-          return {
-            label: `${item.current ? "●" : "○"} ${branch} · ${String(item.subject ?? "")}`,
-            value: branch,
-            command: item.current
-              ? "/close"
-              : `/switch ${encodeURIComponent(branch)}`,
-          };
-        }
-        const revision = String(item.oid ?? "");
-        return {
-          label: `${item.merge ? "merge " : ""}${String(item.shortOid ?? "")} · ${String(item.subject ?? "")}`,
-          value: revision,
-          command: `/review commit ${revision}`,
-        };
-      });
+        },
+      );
       this.patch({
         overlay: {
           kind: action,
@@ -1304,7 +1359,7 @@ export class SessionController {
       this.append({
         kind: "error",
         title: "Select a review provider",
-        body: "Use /provider to inspect available providers, then run /provider use <id>.",
+        body: "Use /provider to inspect available providers, then run /providerswitch <id>.",
       });
       return;
     }
@@ -1580,7 +1635,7 @@ export class SessionController {
         if (type === "select_provider" || type === "select_model")
           return "/provider";
         if (type === "authenticate_provider")
-          return `/provider login ${String(action.provider ?? "<provider>")}`;
+          return `/providerlogin ${String(action.provider ?? "<provider>")}`;
         if (type === "pull_ollama_model")
           return `preflight provider pull ${String(action.model ?? "<model>")} --yes`;
         if (type === "trust_repository") return "preflight init --trust";

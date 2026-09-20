@@ -81,7 +81,7 @@ describe("SessionView", () => {
               {
                 label: "abc123 · Fix token validation",
                 value: "abc123",
-                command: "/review commit abc123",
+                command: "/reviewcommit abc123",
               },
             ],
           },

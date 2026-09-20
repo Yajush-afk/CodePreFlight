@@ -320,7 +320,7 @@ describe("SessionController", () => {
     });
     await controller.start();
 
-    await controller.submit("/review staged");
+    await controller.submit("/reviewstaged");
     const decision = controller.state.pendingDecision;
     expect(decision?.body).toContain("1,200 characters");
 
@@ -362,7 +362,7 @@ describe("SessionController", () => {
     });
     await controller.start();
 
-    await controller.submit("/provider use codex");
+    await controller.submit("/providerswitch codex");
     const decision = controller.state.pendingDecision;
     expect(decision?.title).toContain("codex");
 
@@ -397,7 +397,7 @@ describe("SessionController", () => {
       "gpt-economy",
     ]);
 
-    await controller.submit("/model set gpt-economy");
+    await controller.select({ kind: "model", value: "gpt-economy" });
     const modelDecision = controller.state.pendingDecision;
     await controller.confirm(modelDecision!.id, true);
 
@@ -420,7 +420,7 @@ describe("SessionController", () => {
     });
     await controller.start();
 
-    await controller.submit("/provider login codex");
+    await controller.submit("/providerlogin codex");
     expect(login).not.toHaveBeenCalled();
     const decision = controller.state.pendingDecision;
     expect(decision?.title).toBe("Authenticate Codex CLI?");
@@ -459,9 +459,10 @@ describe("SessionController", () => {
     await controller.submit("/commits");
 
     expect(controller.state.overlay?.kind).toBe("commits");
-    expect(controller.state.overlay?.items?.[0]?.command).toBe(
-      "/review commit abc123",
-    );
+    expect(controller.state.overlay?.items?.[0]?.action).toEqual({
+      kind: "commit",
+      value: "abc123",
+    });
   });
 
   it("previews and explicitly confirms a local branch switch", async () => {
@@ -472,7 +473,7 @@ describe("SessionController", () => {
     });
     await controller.start();
 
-    await controller.submit("/switch main");
+    await controller.submit("/switchbranch main");
     const decision = controller.state.pendingDecision;
     expect(decision?.title).toBe("Switch to main?");
 
@@ -498,7 +499,7 @@ describe("SessionController", () => {
     });
     await controller.start();
 
-    await controller.submit("/mode set auto_plus");
+    await controller.select({ kind: "mode", value: "auto_plus" });
     const decision = controller.state.pendingDecision;
     expect(decision?.title).toContain("Auto+");
     await controller.confirm(decision!.id, true);
@@ -517,7 +518,7 @@ describe("SessionController", () => {
     });
     await controller.start();
 
-    await controller.submit("/scan full");
+    await controller.submit("/scanfull");
     const decision = controller.state.pendingDecision;
     expect(decision?.body).toContain("12 eligible files");
     expect(decision?.body).toContain(
@@ -546,7 +547,7 @@ describe("SessionController", () => {
     await controller.submit("/help");
 
     expect(controller.state.overlay?.kind).toBe("help");
-    expect(controller.state.overlay?.body).toContain("/scan full");
+    expect(controller.state.overlay?.body).toContain("/scanfull");
     expect(controller.history("previous")).toBe("/help");
     expect(controller.history("previous")).toBe("/status");
     expect(controller.history("next")).toBe("/help");
