@@ -5,6 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from codepreflight_engine.activity import operation
 from codepreflight_engine.errors import CodePreflightError
 
 ALLOWED_ENVIRONMENT = {
@@ -54,16 +55,18 @@ def run_provider_process(
     environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-            env=environment or sanitized_environment(),
-        )
+        with operation("Provider", "review", command, approval="approved") as record:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+                env=environment or sanitized_environment(),
+            )
+            record["exitCode"] = result.returncode
     except subprocess.TimeoutExpired as error:
         raise CodePreflightError(
             "provider_timeout",

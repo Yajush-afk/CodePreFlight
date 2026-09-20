@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from .activity import activity_scope
 from .adapters import ProviderRegistry
 from .automation import AutomationManager
 from .cache import ReviewCache
@@ -269,6 +270,11 @@ def dispatch(request: EngineRequest) -> None:
                 health.invalidate(descriptor)
                 raise
             health.record(descriptor, config)
+            request_event(
+                request.requestId,
+                "readiness_changed",
+                {"provider": provider_id, "readiness": review_readiness(descriptor, verified=True)},
+            )
             complete(request.requestId, tested)
             return
         if action == "models":
@@ -425,7 +431,10 @@ def handle_line(line: str) -> None:
             command = raw_command if raw_command in ENGINE_COMMANDS else "invalid"
             repository_path = str(raw.get("repositoryPath", ""))
         request = EngineRequest.model_validate(raw)
-        dispatch(request)
+        with activity_scope(
+            lambda event, payload: request_event(request.requestId, event, payload)
+        ):
+            dispatch(request)
         log_operation(
             event="complete",
             command=command,

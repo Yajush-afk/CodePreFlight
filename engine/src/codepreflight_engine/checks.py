@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import BinaryIO
 
+from .activity import operation
 from .models import CheckDefinition, CheckResult, CheckStatus
 
 MAX_OUTPUT = 12000
@@ -25,6 +26,18 @@ class CheckRunner:
             return list(pool.map(lambda definition: self._run_one(root, definition), definitions))
 
     def _run_one(self, root: Path, definition: CheckDefinition) -> CheckResult:
+        with operation(
+            "Check",
+            "validation",
+            definition.command,
+            mutability="executes_repository_code",
+            approval="approved" if definition.run else "not_approved",
+        ) as record:
+            result = self._execute(root, definition)
+            record.update(exitCode=result.exit_code, outcome=result.status.value)
+            return result
+
+    def _execute(self, root: Path, definition: CheckDefinition) -> CheckResult:
         if not definition.run:
             return CheckResult(
                 name=definition.name,

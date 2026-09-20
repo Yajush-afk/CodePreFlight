@@ -5,6 +5,7 @@ import {
   type EngineRequestOptions,
 } from "./engine-client.js";
 import type { EngineCommand, EngineEvent } from "./protocol.js";
+import { ActivityStore, type OperationRecord } from "./activity-store.js";
 
 export interface SessionEngine {
   request(
@@ -73,6 +74,7 @@ export interface SessionState {
   started: boolean;
   busy: boolean;
   activity?: string;
+  activeActor?: string;
   header?: SessionHeader;
   transcript: TranscriptEntry[];
   pendingDecision?: PendingDecision;
@@ -210,6 +212,7 @@ export class SessionController {
   }
 
   private readonly engine: SessionEngine;
+  private readonly activityStore = new ActivityStore();
 
   get state(): SessionState {
     return this.currentState;
@@ -292,7 +295,14 @@ export class SessionController {
     if (this.active) {
       this.active.abort();
       this.active = undefined;
-      this.patch({ busy: false, activity: undefined, pipeline: undefined });
+      this.activityStore.cancel();
+      this.patch({
+        busy: false,
+        activity: undefined,
+        activeActor: undefined,
+        pendingDecision: undefined,
+        pipeline: undefined,
+      });
       this.append({ kind: "system", body: "Active request cancelled." });
     } else {
       this.patch({ shouldExit: true });
@@ -300,6 +310,7 @@ export class SessionController {
   }
 
   dispose(): void {
+    this.activityStore.clear();
     this.active?.abort();
     this.active = undefined;
     if (this.pollTimer) clearInterval(this.pollTimer);
@@ -329,6 +340,16 @@ export class SessionController {
     if (command === "help") {
       this.patch({
         overlay: { kind: "help", title: "Commands and questions", body: HELP },
+      });
+      return;
+    }
+    if (command === "activity") {
+      this.patch({
+        overlay: {
+          kind: "preview",
+          title: "Session activity",
+          body: this.activityStore.describe(),
+        },
       });
       return;
     }
@@ -461,7 +482,7 @@ export class SessionController {
         "status",
         this.options.repositoryPath,
         {},
-        undefined,
+        (event) => this.handleEngineEvent(event),
         { signal: request.signal },
       ),
       this.engine.request(
@@ -478,8 +499,7 @@ export class SessionController {
         undefined,
         { signal: request.signal },
       ),
-    ]);
-    this.finishRequest(request);
+    ]).finally(() => this.finishRequest(request));
     const snapshot = status.repository as RepositorySnapshot;
     const configuration = status.configuration as
       { review?: { provider?: string } } | undefined;
@@ -1403,20 +1423,31 @@ export class SessionController {
   }
 
   private handleEngineEvent(event: EngineEvent): void {
+    if (event.event.startsWith("operation_")) {
+      const record = event.payload as unknown as OperationRecord;
+      this.activityStore.update(record);
+      if (record.actor !== "Git")
+        this.patch({
+          activeActor: record.status === "running" ? record.actor : "Preflight",
+          activity: `${record.actor} ${record.status === "running" ? "is running" : record.status} ${record.category}`,
+        });
+      return;
+    }
+    if (event.event === "workflow_stage") {
+      this.advancePipeline(String(event.payload?.stage ?? ""));
+      this.patch({ activeActor: String(event.payload?.actor ?? "Preflight") });
+      return;
+    }
     if (event.event === "progress") {
       const message = String(event.payload?.message ?? "Working…");
       this.patch({ activity: message });
-      if (/building focused/i.test(message)) this.advancePipeline("context");
-      else if (/requesting review/i.test(message))
-        this.advancePipeline("provider");
-      else if (/verifying/i.test(message)) this.advancePipeline("verify");
     }
     if (event.event === "scan_progress") {
       this.patch({ activity: String(event.payload?.message ?? "Scanning…") });
       const stage = String(event.payload?.stage ?? "");
       this.advancePipeline(
         stage === "review"
-          ? "batches"
+          ? "review"
           : stage === "verification"
             ? "verify"
             : stage,

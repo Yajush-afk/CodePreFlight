@@ -5,15 +5,17 @@ from typing import Any
 
 import httpx
 
+from codepreflight_engine.activity import operation
 from codepreflight_engine.errors import CodePreflightError
 from codepreflight_engine.models import ProviderDescriptor
 
 
 def _post(url: str, *, json: dict[str, Any], headers: dict[str, str] | None = None) -> Any:
     try:
-        response = httpx.post(url, json=json, headers=headers, timeout=180)
-        response.raise_for_status()
-        return response.json()
+        with operation("Provider", "review", approval="approved"):
+            response = httpx.post(url, json=json, headers=headers, timeout=180)
+            response.raise_for_status()
+            return response.json()
     except httpx.TimeoutException as error:
         raise CodePreflightError(
             "provider_timeout", "Provider request timed out", recoverable=True
