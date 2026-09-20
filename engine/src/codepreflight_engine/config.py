@@ -158,9 +158,7 @@ def load_config(root: Path) -> dict[str, Any]:
     return merged
 
 
-def _raise_validation_error(
-    error: ValidationError, *, code: str, path: Path | None = None
-) -> None:
+def _raise_validation_error(error: ValidationError, *, code: str, path: Path | None = None) -> None:
     fields = [
         {"field": ".".join(str(part) for part in item["loc"]), "message": item["msg"]}
         for item in error.errors()
