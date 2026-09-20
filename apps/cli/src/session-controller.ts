@@ -1036,10 +1036,8 @@ export class SessionController {
       });
       return;
     }
-    this.setPipeline(
-      ["guard", "inventory", "checks", "batches", "verify", "synthesis"],
-      0,
-    );
+    if (approved)
+      this.setPipeline(["checks", "review", "verify", "summary"], 0);
     await this.runBusy("Preparing guarded full scan…", async () => {
       if (!approved) this.fullScanManifest = undefined;
       const request = this.beginRequest();
@@ -1052,6 +1050,9 @@ export class SessionController {
               action: "full",
               provider: this.activeProviderId,
               fullScanApproved: approved,
+              planFingerprint: approved
+                ? this.fullScanManifest?.planFingerprint
+                : undefined,
             },
             (event) => this.handleEngineEvent(event),
             { signal: request.signal },
@@ -1069,7 +1070,7 @@ export class SessionController {
             const manifest = this.fullScanManifest;
             this.requestDecision(
               "Run this full repository scan?",
-              `${String(manifest.eligibleFiles)} eligible files · ${String(manifest.excludedFiles)} excluded · ${String(manifest.redactions)} redactions\n${Number(manifest.totalSelectedCharacters ?? 0).toLocaleString()} selected characters · ${String(manifest.providerRequests)} provider requests\nDestination: ${String(manifest.destination)} (${String(manifest.privacyCategory)})\nThis approval is only for this full scan.`,
+              `${String(manifest.eligibleFiles)} eligible files · ${String(manifest.excludedFiles)} excluded · ${String(manifest.redactions)} redactions\n${Number(manifest.totalSelectedCharacters ?? 0).toLocaleString()} selected characters · approximately ${String(manifest.providerRequests)} provider requests (repair may add requests)\nDestination: ${String(manifest.destination)} (${String(manifest.privacyCategory)})\nPlanned checks: ${JSON.stringify(manifest.plannedChecks)}\nCache available: ${manifest.cacheHit ? "yes" : "no"}\nThis approval is only for this exact full scan.`,
               "approve full scan",
               async () => this.fullScan(true),
             );

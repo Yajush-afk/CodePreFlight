@@ -224,8 +224,8 @@ def dispatch(request: EngineRequest) -> None:
     if request.command == "scan":
         snapshot = RepositoryInspector().inspect(path)
         action = str(request.payload.get("action", "full"))
-        if action != "full":
-            raise CodePreflightError("invalid_scan_action", "Scan action must be full")
+        if action not in {"full", "plan", "execute"}:
+            raise CodePreflightError("invalid_scan_action", "Scan action must be plan or execute")
         result = FullScanOrchestrator().scan(
             Path(snapshot.root),
             request.payload,
