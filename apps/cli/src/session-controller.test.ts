@@ -159,7 +159,7 @@ class FakeEngine implements SessionEngine {
     if (command === "scan") {
       if (!payload.fullScanApproved) {
         onEvent?.({
-          protocolVersion: 2,
+          protocolVersion: 3,
           requestId: "scan",
           event: "consent_required",
           payload: {
@@ -205,7 +205,7 @@ class FakeEngine implements SessionEngine {
     if (command === "review") {
       if (!payload.remoteApproved) {
         onEvent?.({
-          protocolVersion: 2,
+          protocolVersion: 3,
           requestId: "review",
           event: "consent_required",
           payload: {

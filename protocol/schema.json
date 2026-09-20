@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://codepreflight.dev/protocol/v1/schema.json",
+  "$id": "https://codepreflight.dev/protocol/v3/schema.json",
   "title": "CodePreFlight engine protocol",
   "oneOf": [
     { "$ref": "#/$defs/request" },
@@ -11,7 +11,7 @@
       "type": "object",
       "required": ["protocolVersion", "requestId", "command", "repositoryPath", "payload"],
       "properties": {
-        "protocolVersion": { "const": 2 },
+        "protocolVersion": { "const": 3 },
         "requestId": { "type": "string", "minLength": 1 },
         "command": { "enum": ["automation", "cache", "commit", "doctor", "explain", "git_action", "hooks", "init", "panel_review", "pr_prepare", "provider", "providers", "review", "scan", "status", "workspace"] },
         "repositoryPath": { "type": "string", "minLength": 1 },
@@ -23,9 +23,9 @@
       "type": "object",
       "required": ["protocolVersion", "requestId", "event"],
       "properties": {
-        "protocolVersion": { "const": 2 },
+        "protocolVersion": { "const": 3 },
         "requestId": { "type": "string" },
-        "event": { "enum": ["ready", "progress", "consent_required", "provider_delta", "finding", "job_update", "recovery_required", "scan_progress", "complete", "error"] },
+        "event": { "enum": ["ready", "progress", "consent_required", "provider_delta", "finding", "job_update", "recovery_required", "scan_progress", "workflow_stage", "operation_started", "operation_completed", "operation_skipped", "readiness_changed", "complete", "error"] },
         "payload": { "type": "object" },
         "error": {
           "type": "object",

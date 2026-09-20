@@ -28,7 +28,7 @@ class EngineFailure(StrictModel):
 
 
 class EngineEvent(StrictModel):
-    protocolVersion: ProtocolVersion = 2
+    protocolVersion: ProtocolVersion = 3
     requestId: str
     event: EngineEventName
     payload: dict[str, Any] | None = None

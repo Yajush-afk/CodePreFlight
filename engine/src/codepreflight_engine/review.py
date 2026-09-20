@@ -88,6 +88,7 @@ class ReviewOrchestrator:
                 self._base_revision(root, payload, config) if target != "staged" else None
             )
         emit("progress", {"message": f"Building focused {target.replace('_', ' ')} context"})
+        emit("workflow_stage", {"stage": "context", "actor": "Preflight"})
         context = ContextBuilder().build(
             root,
             config,
@@ -151,6 +152,7 @@ class ReviewOrchestrator:
             )
 
         emit("progress", {"message": f"Requesting review from {provider.name}"})
+        emit("workflow_stage", {"stage": "provider", "actor": "Provider"})
         health = ProviderHealth(root)
         health.invalidate(provider)
         try:
@@ -195,6 +197,7 @@ class ReviewOrchestrator:
                 )
 
         emit("progress", {"message": "Verifying provider findings against the repository"})
+        emit("workflow_stage", {"stage": "verify", "actor": "Preflight"})
         findings, rejected = FindingVerifier().verify(
             root,
             response.findings,

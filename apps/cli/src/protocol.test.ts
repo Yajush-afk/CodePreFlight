@@ -6,7 +6,7 @@ describe("parseEngineEvent", () => {
     expect(
       parseEngineEvent(
         JSON.stringify({
-          protocolVersion: 2,
+          protocolVersion: 3,
           requestId: "r1",
           event: "complete",
           payload: {},
@@ -27,7 +27,7 @@ describe("parseEngineEvent", () => {
     expect(() =>
       parseEngineEvent(
         JSON.stringify({
-          protocolVersion: 2,
+          protocolVersion: 3,
           requestId: "r1",
           event: "surprise",
         }),

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from .activity import operation
 from .errors import CodePreflightError
 
 
@@ -23,6 +24,15 @@ class GitRunner:
         self.max_output_bytes = max_output_bytes
 
     def run(self, *args: str, check: bool = True, timeout: float = 20) -> GitResult:
+        mutating = args and args[0] in {"commit", "switch", "config", "update-ref"}
+        with operation(
+            "Git", "repository", ["git", *args], mutability="mutating" if mutating else "read_only"
+        ) as record:
+            result = self._run(*args, check=check, timeout=timeout)
+            record["exitCode"] = result.returncode
+            return result
+
+    def _run(self, *args: str, check: bool = True, timeout: float = 20) -> GitResult:
         try:
             with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
                 process = subprocess.Popen(
