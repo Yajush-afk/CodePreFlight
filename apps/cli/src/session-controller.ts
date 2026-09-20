@@ -9,6 +9,7 @@ import { ActivityStore, type OperationRecord } from "./activity-store.js";
 import { CommandRegistry, type Suggestion } from "./command-registry.js";
 import { SuggestionCoordinator } from "./suggestion-coordinator.js";
 import { OnboardingCoordinator } from "./onboarding-coordinator.js";
+import { WorkflowCoordinator } from "./workflow-coordinator.js";
 
 export interface SessionEngine {
   request(
@@ -94,6 +95,7 @@ export interface SessionState {
   busy: boolean;
   activity?: string;
   activeActor?: string;
+  interruptionNotice?: string;
   header?: SessionHeader;
   transcript: TranscriptEntry[];
   pendingDecision?: PendingDecision;
@@ -210,6 +212,8 @@ export class SessionController {
   private readonly activityStore = new ActivityStore();
   private readonly commands = new CommandRegistry();
   private readonly onboarding = new OnboardingCoordinator();
+  private readonly workflow = new WorkflowCoordinator();
+  private interruptionTimer?: ReturnType<typeof setTimeout>;
   private repositoryTrusted = false;
   private repositoryConfiguration: unknown;
   private readonly suggestions = new SuggestionCoordinator(
@@ -259,6 +263,10 @@ export class SessionController {
 
   async submit(input: string): Promise<void> {
     const value = input.trim();
+    if (value === "/close") {
+      this.patch({ overlay: undefined });
+      return;
+    }
     if (!value || this.currentState.busy || this.currentState.pendingDecision)
       return;
     if (this.commandHistory.at(-1) !== value) this.commandHistory.push(value);
@@ -302,24 +310,48 @@ export class SessionController {
   }
 
   cancel(): void {
-    if (this.active) {
-      this.active.abort();
+    if (this.currentState.busy) {
+      this.active?.abort();
+      this.engine.dispose();
       this.active = undefined;
+      this.retries.clear();
+      this.consentDecisions.clear();
       this.activityStore.cancel();
       this.patch({
         busy: false,
         activity: undefined,
         activeActor: undefined,
         pendingDecision: undefined,
+        interruptionNotice: undefined,
         pipeline: undefined,
       });
       this.append({ kind: "system", body: "Active request cancelled." });
-    } else {
-      this.patch({ shouldExit: true });
+    }
+  }
+
+  interrupt(): void {
+    const decision = this.workflow.interrupt(
+      this.currentState.activeActor,
+      this.currentState.busy,
+    );
+    if (decision === "cancel") {
+      this.cancel();
+      return;
+    }
+    if (decision === "confirm") {
+      if (this.interruptionTimer) clearTimeout(this.interruptionTimer);
+      this.patch({
+        interruptionNotice: `Press Esc again within 2 seconds to stop ${this.currentState.header?.provider ?? "the reviewer"}`,
+      });
+      this.interruptionTimer = setTimeout(
+        () => this.patch({ interruptionNotice: undefined }),
+        2000,
+      );
     }
   }
 
   dispose(): void {
+    if (this.interruptionTimer) clearTimeout(this.interruptionTimer);
     this.activityStore.clear();
     this.active?.abort();
     this.active = undefined;
@@ -1706,7 +1738,14 @@ export class SessionController {
         this.appendError(error);
       }
     } finally {
-      this.patch({ busy: false, activity: undefined });
+      this.workflow.reset();
+      if (this.interruptionTimer) clearTimeout(this.interruptionTimer);
+      this.patch({
+        busy: false,
+        activity: undefined,
+        activeActor: undefined,
+        interruptionNotice: undefined,
+      });
     }
   }
 
