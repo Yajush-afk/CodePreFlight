@@ -30,8 +30,9 @@ Git reads are automatic. Commits require an unchanged staged fingerprint, an app
 message, and explicit final confirmation. CodePreFlight never modifies an unmanaged hook;
 it returns a manual integration snippet when one already exists. Hooks created or already
 managed by CodePreFlight use a removable marked block and fail open on operational failures
-unless the repository opts into fail-closed behavior. CodePreFlight does not push, reset, rebase, merge, switch
-branches, delete branches, or force-push.
+unless the repository opts into fail-closed behavior. Existing local branch switching requires
+a collision preview and explicit approval. CodePreFlight does not push, reset, rebase, merge,
+delete branches, or force-push.
 
 ## Local operational logs
 
@@ -61,7 +62,7 @@ Primary threats and mitigations:
 - Malicious repository configuration: executable checks require repository trust; changing
   the configuration digest or remote identity revokes that trust.
 - Destructive Git behavior: inspection is read-only; commits require explicit confirmation
-  and an unchanged staged fingerprint; push, reset, merge, rebase, checkout, branch deletion,
+  and an unchanged staged fingerprint before, during, and after review; push, reset, merge, rebase, checkout, branch deletion,
   and force-push are not implemented.
 - Hook takeover: unmanaged hooks are never overwritten. Managed blocks can be previewed,
   disabled, removed, and bypassed through standard Git behavior.
@@ -76,3 +77,9 @@ model retention policies are outside CodePreFlight's control. Read-only CLI sand
 depends on the installed provider honoring its documented controls. Static relationship
 analysis is strongest for supported Python and JavaScript/TypeScript patterns and labels
 text-search fallback as inferred.
+
+The activity view reports operations that Preflight executes or observes, not invisible
+provider-internal tools. Codex runs ephemerally with a read-only sandbox in a temporary
+directory; OpenCode disables write/edit/Bash; Claude disallows Bash and editing tools.
+Provider CLI enforcement remains a trust boundary, not an OS-level guarantee created by
+Preflight. Authentication remains provider-owned and may be shared by other applications.

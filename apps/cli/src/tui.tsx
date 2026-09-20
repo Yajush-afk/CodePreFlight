@@ -139,13 +139,12 @@ export function SessionView({
                 {state.pendingDecision.title}
               </Text>
               <Text>
-                {state.pendingDecision.body
-                  .split("\n")
-                  .slice(
-                    scrollOffset,
-                    scrollOffset + Math.max(1, bodyHeight - 3),
-                  )
-                  .join("\n")}
+                {presenter.viewport(
+                  state.pendingDecision.body,
+                  terminalWidth - 4,
+                  Math.max(1, bodyHeight - 4),
+                  scrollOffset,
+                )}
               </Text>
               <Text color={colorEnabled ? "yellow" : undefined}>
                 y {state.pendingDecision.confirmLabel} · n cancel · PgUp/PgDn
@@ -159,22 +158,19 @@ export function SessionView({
               </Text>
               {overlay.body && (
                 <Text>
-                  {overlay.body
-                    .split("\n")
-                    .slice(
-                      scrollOffset,
-                      scrollOffset +
-                        Math.max(
-                          2,
-                          bodyHeight - (overlay.items?.length ? 8 : 2),
-                        ),
-                    )
-                    .join("\n")}
+                  {presenter.viewport(
+                    overlay.body,
+                    terminalWidth - 4,
+                    Math.max(2, bodyHeight - (overlay.items?.length ? 10 : 3)),
+                    scrollOffset,
+                  )}
                 </Text>
               )}
               {overlay.items?.length ? (
                 <SelectInput
+                  key={overlay.title}
                   items={overlay.items.map((item) => ({
+                    key: item.value,
                     label: item.label,
                     value: item,
                   }))}
@@ -232,7 +228,7 @@ export function SessionView({
           label={
             state.activeActor === "Provider"
               ? `${header?.provider ?? "Reviewer"} is reviewing…`
-              : `Preflight: ${state.activity}`
+              : state.activity
           }
           animate={animate}
         />

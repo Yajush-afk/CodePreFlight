@@ -1,7 +1,13 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from codepreflight_engine.models import ProviderDescriptor, ProviderKind
-from codepreflight_engine.readiness import ProviderHealth, review_readiness
+from codepreflight_engine.readiness import (
+    ProviderHealth,
+    consent_fingerprint,
+    remote_approval_matches,
+    review_readiness,
+)
 
 
 def descriptor() -> ProviderDescriptor:
@@ -56,3 +62,29 @@ def test_proxy_environment_is_preserved_without_unrelated_secrets(monkeypatch) -
     assert environment["HTTPS_PROXY"] == "https://proxy.invalid"
     assert environment["SSL_CERT_FILE"] == "/cert.pem"
     assert "UNRELATED_SECRET" not in environment
+
+
+def test_concurrent_health_updates_are_not_lost(git_repository: Path) -> None:
+    providers = [descriptor().model_copy(update={"id": f"provider-{index}"}) for index in range(20)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(
+            pool.map(
+                lambda provider: ProviderHealth(git_repository).record(provider, {}), providers
+            )
+        )
+    assert all(ProviderHealth(git_repository).verified(provider, {}) for provider in providers)
+
+
+def test_session_consent_is_bound_to_provider_settings() -> None:
+    provider = descriptor()
+    payload = {"remoteApproved": True, "consentScope": consent_fingerprint(provider, {})}
+    assert remote_approval_matches(provider, {}, payload)
+    assert not remote_approval_matches(
+        provider, {"providers": {"fake": {"base_url": "https://other.invalid"}}}, payload
+    )
+    assert not remote_approval_matches(
+        provider.model_copy(update={"model_name": "other"}), {}, payload
+    )
+    assert remote_approval_matches(
+        provider, {}, {"remoteApproved": True}
+    )  # direct command approval

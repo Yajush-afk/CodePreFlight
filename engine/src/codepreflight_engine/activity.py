@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -11,6 +12,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
+
+import httpx
 
 from .secrets import redact_secrets
 
@@ -43,8 +46,10 @@ def sanitized_command(command: list[str]) -> str:
             sensitive = False
             continue
         sensitive = bool(
-            re.search(r"(?i)^--?(password|token|api-key|secret|authorization)$", value)
-        )
+            re.search(
+                r"(?i)^--?(password|token|api-key|secret|authorization|prompt|message)$", value
+            )
+        ) or (value == "-m" and "commit" in command[:2])
         cleaned = re.sub(
             r"(?i)(password|token|api[_-]?key|secret|authorization)=\S+", r"\1=[REDACTED]", value
         )
@@ -87,6 +92,7 @@ def operation(
             if isinstance(error, (SystemExit, KeyboardInterrupt))
             else "timed_out"
             if "timeout" in code
+            or isinstance(error, (subprocess.TimeoutExpired, httpx.TimeoutException))
             else "failed"
         )
         record["reason"] = code

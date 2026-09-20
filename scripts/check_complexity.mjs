@@ -9,7 +9,7 @@ const isFunction = node => ts.isFunctionDeclaration(node) || ts.isFunctionExpres
 const decisions = new Set([ts.SyntaxKind.IfStatement, ts.SyntaxKind.ConditionalExpression, ts.SyntaxKind.ForStatement, ts.SyntaxKind.ForInStatement, ts.SyntaxKind.ForOfStatement, ts.SyntaxKind.WhileStatement, ts.SyntaxKind.DoStatement, ts.SyntaxKind.CatchClause, ts.SyntaxKind.CaseClause]);
 const booleanOperators = new Set([ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken]);
 let failures = 0;
-for (const filename of fs.readdirSync(root).filter(name => /\.tsx?$/.test(name) && !name.includes(".test.") && !name.includes(".generated."))) {
+for (const filename of fs.readdirSync(root, { recursive: true }).filter(name => /\.tsx?$/.test(name) && !name.includes(".test.") && !name.includes(".generated."))) {
   const file = ts.createSourceFile(filename, fs.readFileSync(path.join(root, filename), "utf8"), ts.ScriptTarget.Latest, true);
   const visit = node => {
     if (isFunction(node) && node.body) {

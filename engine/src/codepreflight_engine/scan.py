@@ -9,6 +9,7 @@ from typing import Any
 
 import pathspec
 
+from .activity import operation, publish
 from .adapters import ProviderRegistry
 from .checks import CheckRunner
 from .config import load_config
@@ -17,13 +18,13 @@ from .errors import CodePreflightError
 from .finding_schema import parse_provider_response, provider_output_schema
 from .git import GitRunner
 from .models import CheckDefinition, ProviderKind
-from .readiness import ProviderHealth, review_readiness
+from .readiness import ProviderHealth, provider_destination, review_readiness
 from .repository import RepositoryInspector
 from .secrets import redact_secrets, verify_with_external_scanner
 from .trust import is_trusted
 from .verification import FindingVerifier
 
-SCAN_PROMPT_VERSION = "full-scan-v2"
+SCAN_PROMPT_VERSION = "full-scan-v3"
 DEFAULT_BATCH_CHARACTERS = 40_000
 DEFAULT_MAX_FILE_BYTES = 500_000
 
@@ -94,7 +95,9 @@ class _ScanTools:
             )
         )
 
-    def _inventory(self, root: Path, config: dict[str, Any]) -> dict[str, Any]:
+    def _inventory(
+        self, root: Path, config: dict[str, Any], batch_limit: int = DEFAULT_BATCH_CHARACTERS
+    ) -> dict[str, Any]:
         tracked = sorted(filter(None, GitRunner(root).run("ls-files", "-z").stdout.split("\0")))
         configured = config.get("ignore", [])
         matcher = pathspec.GitIgnoreSpec.from_lines(
@@ -115,6 +118,15 @@ class _ScanTools:
                 files.append({"path": relative, "status": "excluded", "reason": "binary content"})
                 continue
             content = raw.decode("utf-8", errors="replace")
+            if max(map(len, content.splitlines()), default=0) + len(relative) + 40 > batch_limit:
+                files.append(
+                    {
+                        "path": relative,
+                        "status": "excluded",
+                        "reason": "source line exceeds batch budget",
+                    }
+                )
+                continue
             redacted = redact_secrets(content)
             if not redacted.safe:
                 files.append(
@@ -332,10 +344,12 @@ class ScanPlanner(_ScanTools):
                 },
             )
 
-        inventory = self._inventory(root, config)
+        batch_limit = self._batch_limit(payload, config)
+        with operation("Preflight", "scan inventory") as record:
+            inventory = self._inventory(root, config, batch_limit)
+            record["summary"] = f"Preflight inspected {len(inventory['files'])} tracked files"
         planned_checks = [CheckDefinition.model_validate(item) for item in config.get("checks", [])]
         repository_map = self._repository_map(snapshot, inventory)
-        batch_limit = self._batch_limit(payload, config)
         batches = self._batches(inventory["selected"], batch_limit)
         fingerprint = self._fingerprint(
             root,
@@ -375,7 +389,7 @@ class ScanPlanner(_ScanTools):
             "providerId": provider.id,
             "model": provider.model_name,
             "variant": provider.variant_name,
-            "destination": "local" if not provider.sends_code_remotely else provider.name,
+            "destination": provider_destination(provider, config),
             "privacyCategory": provider.kind.value,
             "files": inventory["files"],
         }
@@ -390,6 +404,7 @@ class ScanPlanner(_ScanTools):
             "planned_checks": planned_checks,
             "repository_map": repository_map,
             "batches": batches,
+            "batch_limit": batch_limit,
             "cache": cache,
             "cached": cached,
             "final_path": final_path,
@@ -414,7 +429,17 @@ class ScanExecutor(_ScanTools):
                 "Explicit scan approval is required",
                 recoverable=True,
             )
-        plan = ScanPlanner().plan(path, payload)
+        try:
+            plan = ScanPlanner().plan(path, payload)
+        except CodePreflightError as error:
+            if error.code != "scan_blocked":
+                raise
+            raise CodePreflightError(
+                "scan_plan_stale",
+                "Scan prerequisites changed; preview and approve again",
+                recoverable=True,
+                details=error.details,
+            ) from error
         if plan_fingerprint != plan["fingerprint"]:
             raise CodePreflightError(
                 "scan_plan_stale",
@@ -427,8 +452,29 @@ class ScanExecutor(_ScanTools):
             if error.code.startswith("provider_"):
                 ProviderHealth(plan["root"]).invalidate(plan["provider"])
             raise
-        ProviderHealth(plan["root"]).record(plan["provider"], plan["config"])
+        if not result["cacheHit"]:
+            ProviderHealth(plan["root"]).record(plan["provider"], plan["config"])
         return result
+
+    def _assert_repository_unchanged(self, plan: dict[str, Any]) -> None:
+        root, config = plan["root"], load_config(plan["root"])
+        limit = plan["batch_limit"]
+        inventory = self._inventory(root, config, limit)
+        fingerprint = self._fingerprint(
+            root,
+            inventory,
+            config,
+            plan["provider"].model_dump(mode="json"),
+            limit,
+            plan["planned_checks"],
+        )
+        snapshot = RepositoryInspector().inspect(root)
+        if fingerprint != plan["fingerprint"] or self._guard_blockers(root, snapshot):
+            raise CodePreflightError(
+                "scan_plan_stale",
+                "Repository changed during the scan; preview and approve again",
+                recoverable=True,
+            )
 
     def _execute(self, plan: dict[str, Any], emit: Any) -> dict[str, Any]:
         root, config, adapter, provider = (
@@ -443,14 +489,22 @@ class ScanExecutor(_ScanTools):
         if cached:
             return {**cached, "cacheHit": True}
 
+        publish("workflow_stage", {"stage": "checks", "actor": "Check"})
         checks = CheckRunner().run(root, planned_checks)
+        self._assert_repository_unchanged(plan)
+        check_digest = hashlib.sha256(
+            json.dumps(
+                [check.model_dump(mode="json", exclude={"duration_ms"}) for check in checks],
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
 
         verify_with_external_scanner("\n".join(inventory["selected"].values()))
         drafts = []
         reused = 0
         for index, batch in enumerate(batches):
             batch_hash = hashlib.sha256(batch.encode()).hexdigest()
-            batch_path = cache / "batches" / f"{index:04d}-{batch_hash}.json"
+            batch_path = cache / "batches" / check_digest / f"{index:04d}-{batch_hash}.json"
             parsed = self._read_json(batch_path)
             if parsed:
                 reused += 1
@@ -478,6 +532,7 @@ class ScanExecutor(_ScanTools):
             drafts.extend(response.findings)
 
         emit("scan_progress", {"stage": "verification", "message": "Verifying evidence"})
+        self._assert_repository_unchanged(plan)
         findings, rejected = FindingVerifier().verify(root, drafts, target="full")
         for finding in findings:
             emit("finding", {"finding": finding.model_dump(mode="json")})

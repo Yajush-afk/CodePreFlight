@@ -3,8 +3,26 @@ from pathlib import Path
 import pytest
 from conftest import git
 
-from codepreflight_engine.commit import create_commit, staged_fingerprint
+from codepreflight_engine.commit import create_commit, prepare_commit, staged_fingerprint
 from codepreflight_engine.errors import CodePreflightError
+
+
+def test_index_change_during_review_rejects_preparation(git_repository: Path, monkeypatch) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("value = 1\n")
+    git(git_repository, "add", "feature.py")
+
+    def changed_during_review(*args, **kwargs):
+        source.write_text("value = 2\n")
+        git(git_repository, "add", "feature.py")
+        return None
+
+    monkeypatch.setattr(
+        "codepreflight_engine.commit.ReviewOrchestrator.review_staged", changed_during_review
+    )
+    with pytest.raises(CodePreflightError) as error:
+        prepare_commit(git_repository, {}, lambda *args: None)
+    assert error.value.code == "staged_changes_changed"
 
 
 def test_commit_requires_explicit_approval(git_repository: Path) -> None:

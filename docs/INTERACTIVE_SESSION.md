@@ -4,31 +4,45 @@ Run `preflight` inside a Git repository. The session is an ephemeral repository 
 transcript, command history, finding selection, and provider consent disappear when it exits.
 Structured review and scan caches remain under `.git/codepreflight/`; no conversation is saved.
 
-The header shows the repository, current and base branches, locally known ahead/behind state,
-working-tree categories, provider readiness, and review mode. CodePreFlight never fetches merely
-to refresh this display. Suggested actions follow the current repository state.
+The fullscreen header shows repository, branch and changed-file counts. A display-only local
+commit graph appears on the right at 100 columns or wider. The footer shows reviewer, model,
+variant, privacy category and review mode. Detailed tracking/PR/provider information lives in
+its dedicated view. CodePreFlight never fetches to refresh the display. One recommended action
+follows the current state. Use `preflight --inline` to disable fullscreen.
+
+When setup is needed, choose a provider, resolve authentication/model requirements, optionally
+choose reasoning effort and test with synthetic code, then approve repository trust. “Continue
+without AI” leaves all local inspection available. Setup is derived from readiness, not a
+permanent “onboarding completed” flag.
 
 ## Commands
 
 ```text
 /status
-/tree
+/files
+/graph
 /branches
-/switch <local-branch>
+/switchbranch <local-branch>
 /commits
-/review staged
-/review commit <revision>
-/review branch
-/review pr
+/review
+/reviewstaged
+/reviewcommit <revision>
+/reviewbranch
+/reviewpr
 /pr
 /provider
+/providerlogin <provider>
+/providertest <provider>
+/providerswitch <provider>
 /model
 /variant
 /mode
 /jobs
-/automation grant
-/automation revoke
-/scan full
+/activity
+/automationgrant
+/automationrevoke
+/scanfull
+/file <path>
 /commit [message]
 /help
 /clear
@@ -37,17 +51,24 @@ to refresh this display. Suggested actions follow the current repository state.
 
 Slash commands route deterministically. Plain text is sent only as a repository-scoped question,
 such as “What changed on this branch?”, “Explain finding 2”, or “Which tests should I run?”. The
-provider receives locally gathered evidence and has no editing or shell capability.
+provider receives locally gathered evidence; adapters constrain editing and shell tools.
+Preflight reports only tool operations it can actually observe.
 
 `/model` opens the active provider's discoverable standard-tier models. Fast-tier aliases are not
 shown. `/variant` selects provider-supported reasoning effort without changing service speed;
-`/varient` is also accepted. Provider login asks for confirmation, clears the Ink frame while the
+`/varient` offers a correction to `/variant`. Provider login asks for confirmation, clears the Ink frame while the
 official CLI owns the terminal, verifies the resulting authentication state, and then restores the
 session.
 
-Use Up and Down in the composer for ephemeral command history. Use arrows and Enter in a focused
-tree, branch, commit, or provider list. Escape closes an overlay. The first Ctrl+C cancels active
-work; with no active request, Ctrl+C exits.
+Typing `/` opens fuzzy suggestions above the composer; `/mo` ranks model before mode.
+Commands requiring an argument offer contextual commits, branches, providers or paths.
+Arrows select, Tab completes without execution, Enter selects/runs, and Escape dismisses.
+With no suggestion menu, Up/Down navigate ephemeral command history.
+
+Escape closes suggestions, then overlays, then clears composer text, then cancels a pending
+decision. With none of those active it stops local work immediately. During provider work,
+press Escape twice within two seconds to stop; the first press shows inline guidance.
+Ctrl+C explicitly exits the session. PgUp/PgDn scroll transcript or preview details.
 
 ## Review cadence
 
@@ -60,7 +81,7 @@ work; with no active request, Ctrl+C exits.
 Auto and Auto+ state is personal and stored in `.git/codepreflight/automation.json`. Closed-session
 provider use requires a credential-free scoped grant. Provider, executable version, model,
 destination, repository, rules, or configuration changes invalidate it. Inspect jobs with `/jobs`
-and revoke the grant with `/automation revoke`.
+and revoke the grant with `/automationrevoke`.
 
 ## Branch safety
 

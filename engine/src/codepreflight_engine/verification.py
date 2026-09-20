@@ -4,6 +4,7 @@ import hashlib
 import re
 from pathlib import Path
 
+from .activity import operation
 from .git import GitRunner
 from .models import (
     EvidenceLocation,
@@ -25,13 +26,15 @@ class FindingVerifier:
     ) -> tuple[list[Finding], int]:
         verified: list[Finding] = []
         rejected = 0
-        for draft in drafts:
-            finding = self._verify_one(root, draft, target, base_revision, revision)
-            if finding.verification == VerificationState.REJECTED:
-                rejected += 1
-                continue
-            if not self._duplicates_existing(finding, verified):
-                verified.append(finding)
+        with operation("Preflight", "finding verification") as record:
+            for draft in drafts:
+                finding = self._verify_one(root, draft, target, base_revision, revision)
+                if finding.verification == VerificationState.REJECTED:
+                    rejected += 1
+                    continue
+                if not self._duplicates_existing(finding, verified):
+                    verified.append(finding)
+            record["summary"] = f"Preflight checked {len(drafts)} findings; {rejected} rejected"
         return verified, rejected
 
     def _verify_one(

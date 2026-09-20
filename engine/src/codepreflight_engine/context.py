@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 import pathspec
 
+from .activity import publish
 from .checks import CheckRunner
 from .errors import CodePreflightError
 from .git import GitRunner
@@ -56,7 +57,9 @@ class ContextBuilder:
     ) -> ContextPackage:
         ContextPlanner().changed_paths(GitRunner(root), target, base_revision, revision)
         definitions = [CheckDefinition.model_validate(item) for item in config.get("checks", [])]
+        publish("workflow_stage", {"stage": "checks", "actor": "Check"})
         checks = CheckRunner().run(root, definitions)
+        publish("workflow_stage", {"stage": "context", "actor": "Preflight"})
         return ContextPlanner().plan(
             root,
             config,

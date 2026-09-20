@@ -181,7 +181,7 @@ export class SessionController {
   private readonly listeners = new Set<Listener>();
   private readonly retries = new Map<string, Retry>();
   private readonly consentDecisions = new Set<string>();
-  private readonly approvedProviders = new Set<string>();
+  private readonly approvedProviders = new Map<string, string>();
   private active?: AbortController;
   private sequence = 0;
   private providers: ProviderView[] = [];
@@ -190,6 +190,8 @@ export class SessionController {
   private lastReview?: ReviewView;
   private disclosure?: {
     providerId: string;
+    scope: string;
+    destination: string;
     providerName: string;
     kind: string;
     characters: number;
@@ -197,6 +199,8 @@ export class SessionController {
   };
   private fullScanManifest?: Record<string, unknown>;
   private pollTimer?: NodeJS.Timeout;
+  private polling = false;
+  private disposed = false;
   private readonly seenJobs = new Set<string>();
   private readonly commandHistory: string[] = [];
   private historyIndex = 0;
@@ -267,11 +271,13 @@ export class SessionController {
   async submit(input: string): Promise<void> {
     const value = input.trim();
     if (value === "/close") {
+      this.onboarding.active = false;
       this.patch({ overlay: undefined });
       return;
     }
     if (!value || this.currentState.busy || this.currentState.pendingDecision)
       return;
+    this.suggestions.record(value);
     if (this.commandHistory.at(-1) !== value) this.commandHistory.push(value);
     this.historyIndex = this.commandHistory.length;
     if (value === "/clear") {
@@ -308,7 +314,10 @@ export class SessionController {
       return;
     }
     if (this.consentDecisions.delete(decisionId) && this.disclosure?.providerId)
-      this.approvedProviders.add(this.disclosure.providerId);
+      this.approvedProviders.set(
+        this.disclosure.providerId,
+        this.disclosure.scope,
+      );
     await retry?.();
   }
 
@@ -354,6 +363,7 @@ export class SessionController {
   }
 
   dispose(): void {
+    this.disposed = true;
     if (this.interruptionTimer) clearTimeout(this.interruptionTimer);
     this.activityStore.clear();
     this.active?.abort();
@@ -363,6 +373,12 @@ export class SessionController {
     this.retries.clear();
     this.consentDecisions.clear();
     this.approvedProviders.clear();
+    this.commandHistory.length = 0;
+    this.suggestions.clear();
+    this.lastReview = undefined;
+    this.fullScanManifest = undefined;
+    this.disclosure = undefined;
+    this.seenJobs.clear();
     this.listeners.clear();
     this.engine.dispose();
     this.currentState = {
@@ -517,7 +533,11 @@ export class SessionController {
     );
     if (!step) {
       this.onboarding.active = false;
-      this.openProviders();
+      this.patch({ overlay: undefined });
+      this.append({
+        kind: "system",
+        body: "Setup complete. Use /review to choose a review, or /files to explore.",
+      });
       return;
     }
     const items: SessionOverlayItem[] = [
@@ -604,7 +624,11 @@ export class SessionController {
   private async loadArguments(command: string): Promise<Suggestion[]> {
     if (command.startsWith("provider")) {
       const providers = this.providers.filter(
-        (item) => item.installation !== "missing",
+        (item) =>
+          item.installation !== "missing" &&
+          (command !== "providertest" ||
+            item.id === this.activeProviderId ||
+            item.readiness?.state === "ready"),
       );
       providers.sort(
         (a, b) =>
@@ -687,7 +711,7 @@ export class SessionController {
     this.repositoryConfiguration = status.configuration;
     this.providers =
       (providerResult.providers as ProviderView[] | undefined) ?? [];
-    this.activeProviderId = configuration?.review?.provider;
+    this.selectProviderId(configuration?.review?.provider);
     this.automation = automationResult as AutomationView;
     const selected = this.providers.find(
       (item) => item.id === this.activeProviderId,
@@ -717,6 +741,11 @@ export class SessionController {
     await this.refreshGraph();
   }
 
+  private selectProviderId(providerId?: string): void {
+    if (this.activeProviderId !== providerId) this.approvedProviders.clear();
+    this.activeProviderId = providerId;
+  }
+
   private async refreshGraph(announce = false): Promise<void> {
     try {
       const graph = (await this.engine.request(
@@ -736,22 +765,31 @@ export class SessionController {
           body: `Git changed: ${graph.current} at ${graph.head?.slice(0, 7) ?? "unborn HEAD"}. Review context refreshed.`,
         });
       }
-      const header = this.currentState.header;
-      this.patch({
-        graph,
-        header: header
-          ? {
-              ...header,
-              branch: graph.current,
-              staged: graph.workingTree.staged,
-              unstaged: graph.workingTree.unstaged,
-              untracked: graph.workingTree.untracked,
-            }
-          : header,
-      });
+      this.updateGraphHeader(graph);
     } catch {
       this.patch({ graph: undefined });
     }
+  }
+
+  private updateGraphHeader(graph: GitGraph): void {
+    const header = this.currentState.header;
+    this.patch({
+      graph,
+      header: header
+        ? {
+            ...header,
+            branch: graph.current,
+            baseBranch: graph.base ?? header.baseBranch,
+            upstream: graph.upstream ?? "none",
+            ahead: graph.ahead ?? header.ahead,
+            behind: graph.behind ?? header.behind,
+            conflicts: graph.conflicts ?? header.conflicts,
+            staged: graph.workingTree.staged,
+            unstaged: graph.workingTree.unstaged,
+            untracked: graph.workingTree.untracked,
+          }
+        : header,
+    });
   }
 
   private async openGraph(): Promise<void> {
@@ -1001,8 +1039,14 @@ export class SessionController {
   }
 
   private async pollAutomationJobs(): Promise<void> {
-    if (this.active || this.currentState.busy || this.currentState.shouldExit)
+    if (
+      this.polling ||
+      this.active ||
+      this.currentState.busy ||
+      this.currentState.shouldExit
+    )
       return;
+    this.polling = true;
     try {
       this.automation = (await this.engine.request(
         "automation",
@@ -1013,6 +1057,8 @@ export class SessionController {
       if (!this.currentState.busy) await this.refreshGraph(true);
     } catch {
       // Polling remains quiet; explicit /jobs surfaces actionable failures.
+    } finally {
+      this.polling = false;
     }
   }
 
@@ -1323,7 +1369,7 @@ export class SessionController {
             const manifest = this.fullScanManifest;
             this.requestDecision(
               "Run this full repository scan?",
-              `${String(manifest.eligibleFiles)} eligible files · ${String(manifest.excludedFiles)} excluded · ${String(manifest.redactions)} redactions\n${Number(manifest.totalSelectedCharacters ?? 0).toLocaleString()} selected characters · approximately ${String(manifest.providerRequests)} provider requests (repair may add requests)\nDestination: ${String(manifest.destination)} (${String(manifest.privacyCategory)})\nPlanned checks: ${JSON.stringify(manifest.plannedChecks)}\nCache available: ${manifest.cacheHit ? "yes" : "no"}\nThis approval is only for this exact full scan.`,
+              new WorkspacePresenter().scanApproval(manifest),
               "approve full scan",
               async () => this.fullScan(true),
             );
@@ -1365,6 +1411,8 @@ export class SessionController {
               remoteApproved: this.activeProviderId
                 ? this.approvedProviders.has(this.activeProviderId)
                 : false,
+              consentScope:
+                this.approvedProviders.get(this.activeProviderId ?? "") ?? "",
             },
             (event) => this.handleEngineEvent(event),
             { signal: request.signal },
@@ -1583,6 +1631,8 @@ export class SessionController {
               remoteApproved: this.activeProviderId
                 ? this.approvedProviders.has(this.activeProviderId)
                 : false,
+              consentScope:
+                this.approvedProviders.get(this.activeProviderId ?? "") ?? "",
             },
             (event) => this.handleEngineEvent(event),
             { signal: request.signal },
@@ -1646,6 +1696,8 @@ export class SessionController {
               remoteApproved: this.activeProviderId
                 ? this.approvedProviders.has(this.activeProviderId)
                 : false,
+              consentScope:
+                this.approvedProviders.get(this.activeProviderId ?? "") ?? "",
             },
             (event) => this.handleEngineEvent(event),
             { signal: request.signal },
@@ -1705,7 +1757,9 @@ export class SessionController {
     if (record.actor !== "Git")
       this.patch({
         activeActor: record.status === "running" ? record.actor : "Preflight",
-        activity: `${record.actor} ${record.status === "running" ? "is running" : record.status} ${record.category}`,
+        activity:
+          record.summary ??
+          `${record.actor} ${record.status === "running" ? "is running" : record.status} ${record.category}`,
       });
   }
 
@@ -1720,11 +1774,23 @@ export class SessionController {
       { total_characters?: number; redactions?: number } | undefined;
     this.disclosure = {
       providerId: provider?.id ?? "unknown",
+      scope: String(event.payload?.consentScope ?? ""),
+      destination: String(
+        (event.payload?.destination as { address?: string } | undefined)
+          ?.address ??
+          provider?.name ??
+          "unknown",
+      ),
       providerName: provider?.name ?? "unknown provider",
       kind: provider?.kind ?? "unknown",
       characters: manifest?.total_characters ?? 0,
       redactions: manifest?.redactions ?? 0,
     };
+    this.append({
+      kind: "status",
+      title: "Review context",
+      body: `${this.disclosure.providerName} · ${this.disclosure.destination} · ${this.disclosure.kind} · ${this.disclosure.characters.toLocaleString()} characters · ${this.disclosure.redactions} redactions`,
+    });
   }
 
   private requestConsent(retry: Retry): void {
@@ -1737,7 +1803,7 @@ export class SessionController {
         id,
         title: `Send context to ${this.disclosure.providerName}?`,
         body:
-          `${this.disclosure.kind} · ${this.disclosure.characters.toLocaleString()} characters · ` +
+          `${this.disclosure.destination} · ${this.disclosure.kind} · ${this.disclosure.characters.toLocaleString()} characters · ` +
           `${this.disclosure.redactions} redactions\nApproval lasts only for this provider and open session.`,
         confirmLabel: "Approve once for this session",
       },
@@ -1866,6 +1932,7 @@ export class SessionController {
   }
 
   private patch(update: Partial<SessionState>): void {
+    if (this.disposed) return;
     this.currentState = { ...this.currentState, ...update };
     for (const listener of this.listeners) listener(this.currentState);
   }

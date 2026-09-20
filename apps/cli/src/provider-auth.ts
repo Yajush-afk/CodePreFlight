@@ -77,13 +77,14 @@ export async function verifyProviderAuthentication(
   }>((resolve, reject) => {
     const child = spawn(plan.command, plan.args, {
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
     });
     let output = "";
     child.stdout.on("data", (chunk: Buffer | string) => {
-      output += chunk.toString();
+      output = (output + chunk.toString()).slice(-16_000);
     });
     child.stderr.on("data", (chunk: Buffer | string) => {
-      output += chunk.toString();
+      output = (output + chunk.toString()).slice(-16_000);
     });
     child.once("error", reject);
     child.once("exit", (code) => resolve({ code, output }));

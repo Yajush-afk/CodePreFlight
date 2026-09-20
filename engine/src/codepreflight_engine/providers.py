@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+from urllib.parse import urlsplit
 
 from .models import (
     AuthenticationState,
@@ -39,7 +40,7 @@ REQUIRED_FLAGS = {
         "--config",
     ),
     "opencode": ("--format", "--dir", "--pure", "--model", "--variant"),
-    "claude": ("--output-format", "--disallowedTools", "--permission-mode", "--model"),
+    "claude": ("-p", "--output-format", "--disallowedTools", "--permission-mode", "--model"),
 }
 
 
@@ -52,7 +53,12 @@ def discover_providers(config: dict[str, Any] | None = None) -> list[ProviderDes
             )
         )
 
-    configured = bool(os.environ.get("OPENAI_API_KEY"))
+    api_key_env = str(
+        config.get("providers", {})
+        .get("openai-compatible", {})
+        .get("api_key_env", "OPENAI_API_KEY")
+    )
+    configured = bool(os.environ.get(api_key_env))
     providers.append(
         ProviderDescriptor(
             id="openai-compatible",
@@ -79,7 +85,7 @@ def discover_providers(config: dict[str, Any] | None = None) -> list[ProviderDes
                 else None
             ),
             sends_code_remotely=True,
-            detail="uses OPENAI_API_KEY" if configured else "set OPENAI_API_KEY",
+            detail=f"uses {api_key_env}" if configured else f"set {api_key_env}",
         )
     )
     return providers
@@ -132,43 +138,7 @@ def _version(executable: str) -> str | None:
 
 def _health(executable: str, provider_config: dict[str, Any]) -> dict[str, Any]:
     if executable == "ollama":
-        model_name = str(provider_config.get("model", "qwen2.5-coder:7b"))
-        result = _run(["ollama", "list"])
-        if not result or result.returncode != 0:
-            return {
-                "state": ProviderState.INSTALLED,
-                "installation": InstallationState.INSTALLED,
-                "authentication": AuthenticationState.NOT_APPLICABLE,
-                "model": ModelState.MISSING,
-                "invocation": InvocationState.FAILED,
-                "availability": ProviderAvailability.DEGRADED,
-                "model_name": model_name,
-                "variant_name": None,
-                "detail": "Ollama is installed but its runtime is unavailable",
-            }
-        names = {
-            line.split()[0]
-            for line in result.stdout.splitlines()[1:]
-            if line.strip() and line.split()
-        }
-        available = model_name in names
-        return {
-            "state": ProviderState.READY if available else ProviderState.INSTALLED,
-            "installation": InstallationState.INSTALLED,
-            "authentication": AuthenticationState.NOT_APPLICABLE,
-            "model": ModelState.READY if available else ModelState.MISSING,
-            "invocation": InvocationState.UNTESTED,
-            "availability": (
-                ProviderAvailability.READY if available else ProviderAvailability.DEGRADED
-            ),
-            "model_name": model_name,
-            "variant_name": None,
-            "detail": (
-                f"model {model_name} is available"
-                if available
-                else f"model {model_name} is not installed; run `ollama pull {model_name}`"
-            ),
-        }
+        return _ollama_health(provider_config)
 
     if executable in REQUIRED_FLAGS:
         help_command = (
@@ -180,7 +150,11 @@ def _health(executable: str, provider_config: dict[str, Any]) -> dict[str, Any]:
             help_command = [executable, "--help"]
         help_result = _run(help_command)
         help_output = (help_result.stdout + help_result.stderr) if help_result else ""
-        missing = [flag for flag in REQUIRED_FLAGS[executable] if flag not in help_output]
+        missing = [
+            flag
+            for flag in REQUIRED_FLAGS[executable]
+            if not re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", help_output)
+        ]
         if missing:
             return {
                 "state": ProviderState.ERROR,
@@ -228,11 +202,69 @@ def _health(executable: str, provider_config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ollama_health(provider_config: dict[str, Any]) -> dict[str, Any]:
+    model_name = str(provider_config.get("model", "qwen2.5-coder:7b"))
+    endpoint = str(provider_config.get("base_url", "http://127.0.0.1:11434"))
+    parsed = urlsplit(endpoint)
+    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"} or parsed.scheme not in {
+        "http",
+        "https",
+    }:
+        return {
+            "availability": ProviderAvailability.UNAVAILABLE,
+            "installation": InstallationState.INSTALLED,
+            "authentication": AuthenticationState.NOT_APPLICABLE,
+            "model": ModelState.MISSING,
+            "invocation": InvocationState.UNTESTED,
+            "model_name": model_name,
+            "detail": (
+                "Ollama requires a loopback endpoint. "
+                "Remote endpoints are not supported by the local adapter."
+            ),
+        }
+    result = _run(["ollama", "list"], environment={"OLLAMA_HOST": endpoint})
+    if not result or result.returncode != 0:
+        return {
+            "state": ProviderState.INSTALLED,
+            "installation": InstallationState.INSTALLED,
+            "authentication": AuthenticationState.NOT_APPLICABLE,
+            "model": ModelState.MISSING,
+            "invocation": InvocationState.FAILED,
+            "availability": ProviderAvailability.DEGRADED,
+            "model_name": model_name,
+            "variant_name": None,
+            "detail": "Ollama is installed but its runtime is unavailable",
+        }
+    names = {
+        line.split()[0] for line in result.stdout.splitlines()[1:] if line.strip() and line.split()
+    }
+    available = model_name in names
+    return {
+        "state": ProviderState.READY if available else ProviderState.INSTALLED,
+        "installation": InstallationState.INSTALLED,
+        "authentication": AuthenticationState.NOT_APPLICABLE,
+        "model": ModelState.READY if available else ModelState.MISSING,
+        "invocation": InvocationState.UNTESTED,
+        "availability": (
+            ProviderAvailability.READY if available else ProviderAvailability.DEGRADED
+        ),
+        "model_name": model_name,
+        "variant_name": None,
+        "detail": (
+            f"model {model_name} is available"
+            if available
+            else f"model {model_name} is not installed; run `ollama pull {model_name}`"
+        ),
+    }
+
+
 def _strip_ansi(value: str) -> str:
     return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value)
 
 
-def _run(command: list[str]) -> subprocess.CompletedProcess[str] | None:
+def _run(
+    command: list[str], *, environment: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str] | None:
     try:
         return subprocess.run(
             command,
@@ -240,6 +272,7 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str] | None:
             capture_output=True,
             text=True,
             timeout=3,
+            env={**os.environ, **(environment or {})},
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

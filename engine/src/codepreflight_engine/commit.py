@@ -19,10 +19,15 @@ def staged_fingerprint(root: Path) -> str:
 
 
 def prepare_commit(root: Path, payload: dict[str, Any], emit: EventEmitter) -> CommitPreparation:
+    fingerprint = staged_fingerprint(root)
     review = ReviewOrchestrator().review_staged(root, payload, emit)
+    if staged_fingerprint(root) != fingerprint:
+        raise CodePreflightError(
+            "staged_changes_changed", "Staged changes changed during review; review again"
+        )
     return CommitPreparation(
         message=generate_commit_message(review),
-        fingerprint=staged_fingerprint(root),
+        fingerprint=fingerprint,
         review=review,
     )
 

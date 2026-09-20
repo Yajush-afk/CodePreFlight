@@ -9,6 +9,7 @@ export interface OperationRecord {
   durationMs?: number;
   exitCode?: number;
   reason?: string;
+  summary?: string;
 }
 
 export class ActivityStore {
@@ -36,7 +37,7 @@ export class ActivityStore {
       Array.from(this.records.values())
         .map(
           (record) =>
-            `${record.actor} · ${record.category} · ${record.status}${record.durationMs === undefined ? "" : ` · ${record.durationMs}ms`}\n  ${record.command ?? "No shell command"}\n  ${record.mutability} · approval: ${record.approval}${record.reason ? ` · ${record.reason}` : ""}`,
+            `${record.summary ?? `${record.actor} · ${record.category}`} · ${record.status}${record.durationMs === undefined ? "" : ` · ${record.durationMs}ms`}\n  ${record.command ?? "No shell command"}\n  ${record.mutability} · approval: ${record.approval}${record.reason ? ` · ${record.reason}` : ""}`,
         )
         .join("\n") || "No operations recorded in this session."
     );

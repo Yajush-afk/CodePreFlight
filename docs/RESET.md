@@ -14,3 +14,32 @@ Run a synthetic provider test or a manual review to establish fresh evidence. Fu
 and automated reviews require matching successful invocation evidence. Signing in alone
 does not establish it. Global provider sign-out is a separate provider-owned action and
 can affect other applications using the same account.
+
+## Recoverable manual reset
+
+Close Preflight and let any background review workers finish first. Remove managed hooks
+if you do not want them to queue work after the reset. These commands only operate in the
+repository you are currently inside:
+
+```bash
+preflight hooks remove pre-commit --write
+preflight hooks remove post-commit --write
+preflight hooks remove pre-push --write
+git rev-parse --show-toplevel
+preflight_state="$(git rev-parse --path-format=absolute --git-path codepreflight)"
+ls -la "$preflight_state"
+```
+
+After verifying the displayed path belongs to the intended repository, move the state
+aside instead of deleting it:
+
+```bash
+mv -- "$preflight_state" "$preflight_state.backup-$(date +%Y%m%d-%H%M%S)"
+preflight
+```
+
+If the directory does not exist, there is no repository-local state to reset. This resets
+personal preferences, health evidence, trust, review/scan caches, jobs and grants. It does
+not change commits, source files, global Preflight preferences, optional team configuration,
+or provider authentication. Keep the backup private; it can contain review findings.
+To reset only ordinary review cache, use `preflight cache clear` instead.
