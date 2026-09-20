@@ -7,7 +7,9 @@ import {
   SessionController,
   type SessionState,
   type TranscriptEntry,
+  type SessionAction,
 } from "./session-controller.js";
+import type { Suggestion } from "./command-registry.js";
 
 interface AppProps {
   repositoryPath: string;
@@ -23,6 +25,10 @@ interface SessionViewProps {
   terminalHeight?: number;
   colorEnabled?: boolean;
   terminalHandoff?: boolean;
+  onSelect?: (action: SessionAction) => void;
+  suggestions?: Suggestion[];
+  suggestionIndex?: number;
+  suggestionsLoading?: boolean;
 }
 
 const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
@@ -101,6 +107,10 @@ export function SessionView({
   terminalHeight = 40,
   colorEnabled = true,
   terminalHandoff = false,
+  onSelect,
+  suggestions = [],
+  suggestionIndex = 0,
+  suggestionsLoading = false,
 }: SessionViewProps): React.JSX.Element {
   if (terminalHandoff) return <></>;
   const header = state.header;
@@ -255,9 +265,13 @@ export function SessionView({
             <SelectInput
               items={(state.overlay.items ?? []).map((item) => ({
                 label: item.label,
-                value: item.command,
+                value: item,
               }))}
-              onSelect={(item) => onSubmit(item.value)}
+              onSelect={({ value }) =>
+                value.action
+                  ? onSelect?.(value.action)
+                  : onSubmit(value.command ?? "")
+              }
               limit={12}
             />
           ) : null}
@@ -265,6 +279,28 @@ export function SessionView({
         </Box>
       )}
 
+      {!state.overlay &&
+        !state.pendingDecision &&
+        (suggestions.length > 0 || suggestionsLoading) && (
+          <Box flexDirection="column" marginTop={1}>
+            {suggestionsLoading ? (
+              <Text dimColor>Loading suggestions…</Text>
+            ) : (
+              suggestions.slice(0, 6).map((item, index) => (
+                <Text
+                  key={item.value}
+                  color={index === suggestionIndex ? accent : undefined}
+                >
+                  {index === suggestionIndex ? "›" : " "} {item.label}{" "}
+                  <Text dimColor>{item.disabled ?? item.context}</Text>
+                </Text>
+              ))
+            )}
+            <Text dimColor>
+              ↑↓ choose · Tab complete · Enter select · Esc dismiss
+            </Text>
+          </Box>
+        )}
       <Box marginTop={1} borderStyle="single" borderColor={accent} paddingX={1}>
         <Text color={accent}>preflight › </Text>
         <TextInput
@@ -280,7 +316,7 @@ export function SessionView({
       <Text dimColor>
         {narrow
           ? "/help · ↑↓ history · Ctrl+C cancel"
-          : "/tree · /commits · /review staged · /mode · /help · ↑↓ history · Ctrl+C cancel/exit"}
+          : "/files · /commits · /reviewstaged · /mode · /help · ↑↓ history · Ctrl+C cancel/exit"}
       </Text>
     </Box>
   );
@@ -314,6 +350,35 @@ export function App({
   );
   const [state, setState] = useState<SessionState>(controller.state);
   const [input, setInput] = useState("");
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+
+  useEffect(() => {
+    let current = true;
+    if (!input.startsWith("/")) {
+      setSuggestions([]);
+      return;
+    }
+    setSuggestionsLoading(true);
+    void controller
+      .suggest(input)
+      .then((items) => {
+        if (current) {
+          setSuggestions(items.slice(0, 6));
+          setSuggestionIndex(0);
+        }
+      })
+      .catch(() => {
+        if (current) setSuggestions([]);
+      })
+      .finally(() => {
+        if (current) setSuggestionsLoading(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, [input, controller]);
   const [dimensions, setDimensions] = useState({
     width: stdout.columns ?? 100,
     height: stdout.rows ?? 40,
@@ -346,6 +411,26 @@ export function App({
 
   useInput(
     (value, key) => {
+      if (suggestions.length && !state.overlay && !state.pendingDecision) {
+        if (key.escape) {
+          setSuggestions([]);
+          return;
+        }
+        if (key.upArrow) {
+          setSuggestionIndex(
+            (index) => (index + suggestions.length - 1) % suggestions.length,
+          );
+          return;
+        }
+        if (key.downArrow) {
+          setSuggestionIndex((index) => (index + 1) % suggestions.length);
+          return;
+        }
+        if (key.tab) {
+          setInput(suggestions[suggestionIndex]!.completion);
+          return;
+        }
+      }
       if (key.ctrl && value === "c") controller.cancel();
       if (key.escape && state.overlay) void controller.submit("/close");
       if (!state.overlay && !state.pendingDecision && !state.busy) {
@@ -360,6 +445,16 @@ export function App({
   );
 
   const submit = (value: string): void => {
+    const choice = suggestions[suggestionIndex];
+    if (!state.overlay && choice) {
+      if (choice.disabled) return;
+      if (choice.argument) {
+        setInput(choice.completion);
+        return;
+      }
+      value = choice.completion;
+    }
+    setSuggestions([]);
     setInput("");
     void controller.submit(value);
   };
@@ -370,6 +465,12 @@ export function App({
       input={input}
       onInput={setInput}
       onSubmit={submit}
+      onSelect={(action) => {
+        void controller.select(action);
+      }}
+      suggestions={suggestions}
+      suggestionIndex={suggestionIndex}
+      suggestionsLoading={suggestionsLoading}
       terminalWidth={dimensions.width}
       terminalHeight={dimensions.height}
       colorEnabled={!process.env.NO_COLOR}
