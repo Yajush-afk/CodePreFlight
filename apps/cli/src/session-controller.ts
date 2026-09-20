@@ -247,9 +247,9 @@ export class SessionController {
       const header = this.currentState.header;
       this.append({
         kind: "system",
-        title: "Ready for preflight",
+        title: "Repository loaded",
         body: header
-          ? `${header.staged} staged · ${header.unstaged} unstaged · ${header.untracked} untracked · ${header.conflicts} conflicts\nSuggested: ${this.suggestedActions(header).join(" · ")}`
+          ? `${header.staged} staged · ${header.unstaged} unstaged · ${header.untracked} untracked · ${header.conflicts} conflicts`
           : "Repository session started. Try /status or /help.",
       });
       this.appendAutomationUpdates();
