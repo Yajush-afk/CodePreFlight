@@ -21,6 +21,7 @@ import {
   runInteractiveProviderCommand,
 } from "./provider-auth.js";
 import { App } from "./tui.js";
+import { TerminalSession } from "./terminal-session.js";
 
 const program = new Command();
 const client = new EngineClient();
@@ -66,6 +67,7 @@ program
     "Inspect and review repository changes before they enter Git history",
   )
   .version("0.1.0")
+  .option("--inline", "use inline terminal output instead of fullscreen")
   .showHelpAfterError();
 
 function engineCommand(
@@ -1129,9 +1131,25 @@ program
     },
   );
 
-program.action(() => {
-  render(React.createElement(App, { repositoryPath: resolve(process.cwd()) }), {
-    exitOnCtrlC: false,
-  });
+program.action(async (options: { inline?: boolean }) => {
+  if (!process.stdin.isTTY) {
+    printValue(await client.request("status", resolve(process.cwd())), false);
+    return;
+  }
+  const terminal = new TerminalSession(Boolean(options.inline));
+  terminal.install();
+  try {
+    const application = render(
+      React.createElement(App, {
+        repositoryPath: resolve(process.cwd()),
+        terminal,
+      }),
+      { exitOnCtrlC: false },
+    );
+    await application.waitUntilExit();
+  } finally {
+    terminal.onExit?.();
+    terminal.dispose();
+  }
 });
 await program.parseAsync(process.argv);

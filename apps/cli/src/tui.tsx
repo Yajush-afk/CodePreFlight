@@ -6,14 +6,17 @@ import { loginProvider } from "./provider-auth.js";
 import {
   SessionController,
   type SessionState,
-  type TranscriptEntry,
   type SessionAction,
 } from "./session-controller.js";
 import type { Suggestion } from "./command-registry.js";
+import { TerminalSession, interactiveEffects } from "./terminal-session.js";
+import { WorkspacePresenter } from "./workspace-presenter.js";
+import { WorkingIndicator } from "./working-indicator.js";
 
 interface AppProps {
   repositoryPath: string;
   controller?: SessionController;
+  terminal?: TerminalSession;
 }
 
 interface SessionViewProps {
@@ -29,6 +32,9 @@ interface SessionViewProps {
   suggestions?: Suggestion[];
   suggestionIndex?: number;
   suggestionsLoading?: boolean;
+  fullscreen?: boolean;
+  animate?: boolean;
+  scrollOffset?: number;
 }
 
 const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
@@ -38,66 +44,7 @@ const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
   INFORMATIONAL: "gray",
 };
 
-function TranscriptItem({
-  entry,
-  colorEnabled,
-}: {
-  entry: TranscriptEntry;
-  colorEnabled: boolean;
-}): React.JSX.Element {
-  if (entry.kind === "user") {
-    return (
-      <Box marginTop={1}>
-        <Text color={colorEnabled ? "cyan" : undefined} bold>
-          You › {entry.body}
-        </Text>
-      </Box>
-    );
-  }
-  const titleColor = !colorEnabled
-    ? undefined
-    : entry.kind === "error"
-      ? "red"
-      : entry.kind === "review"
-        ? "yellow"
-        : entry.kind === "answer"
-          ? "green"
-          : undefined;
-  return (
-    <Box marginTop={1} flexDirection="column">
-      {entry.title && (
-        <Text bold color={titleColor}>
-          {entry.kind === "error"
-            ? "× "
-            : entry.kind === "review"
-              ? "◆ "
-              : entry.kind === "answer"
-                ? "↳ "
-                : entry.kind === "status"
-                  ? "i "
-                  : "· "}
-          {entry.title}
-        </Text>
-      )}
-      {entry.body.split("\n").map((line, index) => {
-        const severity = Object.keys(SEVERITY_COLORS).find((value) =>
-          line.includes(value),
-        );
-        return (
-          <Text
-            key={`${entry.id}-${index}`}
-            color={
-              colorEnabled && severity ? SEVERITY_COLORS[severity] : undefined
-            }
-          >
-            {line}
-          </Text>
-        );
-      })}
-    </Box>
-  );
-}
-
+// Declarative terminal layout; keep workflow decisions in the controller.
 export function SessionView({
   state,
   input,
@@ -111,212 +58,195 @@ export function SessionView({
   suggestions = [],
   suggestionIndex = 0,
   suggestionsLoading = false,
+  fullscreen = false,
+  animate = false,
+  scrollOffset = 0,
 }: SessionViewProps): React.JSX.Element {
   if (terminalHandoff) return <></>;
   const header = state.header;
-  const narrow = terminalWidth < 96;
-  const recent = state.transcript.slice(
-    -Math.max(6, Math.min(narrow ? 12 : 24, terminalHeight - 17)),
-  );
   const accent = colorEnabled ? "cyan" : undefined;
+  const presenter = new WorkspacePresenter();
+  const menuOpen =
+    !state.overlay &&
+    !state.pendingDecision &&
+    (suggestions.length > 0 || suggestionsLoading);
+  const bodyHeight = Math.max(4, terminalHeight - (menuOpen ? 18 : 11));
+  const lines = presenter.transcript(
+    state.transcript,
+    Math.max(10, terminalWidth - 4),
+    bodyHeight,
+    scrollOffset,
+  );
+  const overlay = state.overlay;
   return (
-    <Box flexDirection="column" paddingX={1}>
-      <Box justifyContent="space-between">
-        <Text bold color={accent}>
-          {narrow ? "──✈ PREFLIGHT" : "────✈  CODE PREFLIGHT"}
+    <Box
+      flexDirection="column"
+      paddingX={1}
+      width={terminalWidth}
+      height={fullscreen ? terminalHeight : undefined}
+    >
+      <Text bold color={accent}>
+        ──✈ PREFLIGHT{" "}
+        <Text color={undefined}>
+          {header
+            ? `  ${header.repository} / ${header.branch}`
+            : state.started
+              ? "  repository unavailable"
+              : "  opening repository…"}
         </Text>
-        {!narrow && <Text dimColor>repository quality control</Text>}
-      </Box>
-
-      {header ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text>
-            <Text bold>{header.repository}</Text>
-            {"  "}
-            <Text color={accent}>{header.branch}</Text>
-            <Text dimColor> → {header.baseBranch}</Text>
-            {"  "}
-            <Text
-              color={colorEnabled && header.behind > 0 ? "yellow" : undefined}
-            >
-              local ↑{header.ahead} ↓{header.behind}
+      </Text>
+      {header && (
+        <Text dimColor>
+          +{header.staged} staged · ~{header.unstaged} changed · ?
+          {header.untracked} new
+          {header.conflicts ? ` · ${header.conflicts} conflicts` : ""}
+        </Text>
+      )}
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        height={bodyHeight}
+        overflowY="hidden"
+        marginTop={1}
+      >
+        {state.pendingDecision ? (
+          <>
+            <Text bold color={colorEnabled ? "yellow" : undefined}>
+              {state.pendingDecision.title}
             </Text>
-          </Text>
-          <Text>
-            <Text color={colorEnabled ? "green" : undefined}>
-              +{header.staged} staged
+            <Text>
+              {state.pendingDecision.body
+                .split("\n")
+                .slice(scrollOffset, scrollOffset + Math.max(1, bodyHeight - 3))
+                .join("\n")}
             </Text>
-            {"  "}
             <Text color={colorEnabled ? "yellow" : undefined}>
-              ~{header.unstaged} changed
+              y {state.pendingDecision.confirmLabel} · n cancel · PgUp/PgDn
+              inspect
             </Text>
-            {"  "}
-            <Text color={colorEnabled ? "magenta" : undefined}>
-              ?{header.untracked} new
+          </>
+        ) : overlay ? (
+          <>
+            <Text bold color={accent}>
+              {overlay.title}
             </Text>
-            {"  "}
-            <Text color={colorEnabled && header.conflicts ? "red" : undefined}>
-              !{header.conflicts} conflicts
-            </Text>
-          </Text>
-          <Text>
-            provider <Text bold>{header.provider}</Text> [
-            {header.providerAvailability ?? "unknown"}] · auth{" "}
-            {header.providerAuthentication ?? "unknown"} · model{" "}
-            {header.providerModel ?? "not applicable"} · variant{" "}
-            {header.providerVariant ?? "provider default"}
-          </Text>
-          <Text>
-            privacy {header.providerPrivacy ?? "unknown"} · mode{" "}
-            <Text bold>{header.reviewMode.replace("_", "+")}</Text> · PR{" "}
-            {header.pullRequest ?? "not checked"}
-          </Text>
-        </Box>
-      ) : (
-        <Box marginTop={1}>
-          <Text color={accent}>Inspecting repository…</Text>
-        </Box>
-      )}
-
-      <Box marginTop={1} flexDirection="column">
-        {recent.map((entry) => (
-          <TranscriptItem
-            key={entry.id}
-            entry={entry}
-            colorEnabled={colorEnabled}
-          />
-        ))}
-      </Box>
-
-      {state.pipeline && (
-        <Box marginTop={1} gap={narrow ? 1 : 2} flexWrap="wrap">
-          {state.pipeline.map((item) => (
-            <Text
-              key={item.label}
-              color={
-                !colorEnabled
-                  ? undefined
-                  : item.status === "failed"
-                    ? "red"
-                    : item.status === "complete"
-                      ? "green"
-                      : item.status === "active"
-                        ? "cyan"
-                        : "gray"
-              }
-            >
-              {item.status === "complete"
-                ? "✓"
-                : item.status === "active"
-                  ? "◐"
-                  : item.status === "failed"
-                    ? "×"
-                    : "○"}{" "}
-              {item.label}
-            </Text>
-          ))}
-        </Box>
-      )}
-
-      {state.activity && (
-        <Box marginTop={1}>
-          <Text color={accent}>◐ {state.activity}</Text>
-        </Box>
-      )}
-
-      {state.pendingDecision && (
-        <Box
-          marginTop={1}
-          paddingX={1}
-          flexDirection="column"
-          borderStyle={narrow ? "single" : "round"}
-          borderColor={colorEnabled ? "yellow" : undefined}
-        >
-          <Text bold>{state.pendingDecision.title}</Text>
-          <Text>{state.pendingDecision.body}</Text>
-          <Text color={colorEnabled ? "yellow" : undefined}>
-            y {state.pendingDecision.confirmLabel} · n cancel
-          </Text>
-        </Box>
-      )}
-
-      {state.overlay && !state.pendingDecision && (
-        <Box
-          marginTop={1}
-          paddingX={1}
-          flexDirection="column"
-          borderStyle={narrow ? "single" : "round"}
-          borderColor={accent}
-        >
-          <Text bold color={accent}>
-            {state.overlay.title}
-          </Text>
-          {state.overlay.body && (
-            <>
+            {overlay.body && (
               <Text>
-                {state.overlay.body
+                {overlay.body
                   .split("\n")
-                  .slice(0, Math.max(8, terminalHeight - 12))
+                  .slice(
+                    scrollOffset,
+                    scrollOffset +
+                      Math.max(2, bodyHeight - (overlay.items?.length ? 8 : 2)),
+                  )
                   .join("\n")}
               </Text>
-            </>
-          )}
-          {state.overlay.items?.length ? (
-            <SelectInput
-              items={(state.overlay.items ?? []).map((item) => ({
-                label: item.label,
-                value: item,
-              }))}
-              onSelect={({ value }) =>
-                value.action
-                  ? onSelect?.(value.action)
-                  : onSubmit(value.command ?? "")
-              }
-              limit={12}
+            )}
+            {overlay.items?.length ? (
+              <SelectInput
+                items={overlay.items.map((item) => ({
+                  label: item.label,
+                  value: item,
+                }))}
+                onSelect={({ value }) =>
+                  value.action
+                    ? onSelect?.(value.action)
+                    : onSubmit(value.command ?? "")
+                }
+                limit={Math.max(2, Math.min(8, bodyHeight - 4))}
+              />
+            ) : null}
+            <Text dimColor>Esc back · PgUp/PgDn inspect</Text>
+          </>
+        ) : (
+          lines.map((line, index) => {
+            const severity = Object.keys(SEVERITY_COLORS).find((value) =>
+              line.includes(value),
+            );
+            return (
+              <Text
+                key={index}
+                wrap="truncate-end"
+                color={
+                  colorEnabled && severity
+                    ? SEVERITY_COLORS[severity]
+                    : undefined
+                }
+              >
+                {line || " "}
+              </Text>
+            );
+          })
+        )}
+      </Box>
+      {state.pipeline && (
+        <Text dimColor>
+          {state.pipeline
+            .map(
+              (item) =>
+                `${item.status === "complete" ? "✓" : item.status === "failed" ? "×" : item.status === "active" ? "◐" : "○"} ${item.label}`,
+            )
+            .join("  ")}
+        </Text>
+      )}
+      {state.activity && (
+        <WorkingIndicator
+          label={
+            state.activeActor === "Provider"
+              ? `${header?.provider ?? "Reviewer"} is reviewing…`
+              : `Preflight: ${state.activity}`
+          }
+          animate={animate}
+        />
+      )}
+      {state.interruptionNotice && (
+        <Text color={colorEnabled ? "yellow" : undefined}>
+          {state.interruptionNotice}
+        </Text>
+      )}
+      {menuOpen && (
+        <Box flexDirection="column">
+          {suggestionsLoading ? (
+            <WorkingIndicator
+              label="Loading suggestions…"
+              animate={animate && !state.activity}
             />
-          ) : null}
-          <Text dimColor>Esc close</Text>
+          ) : (
+            suggestions.slice(0, 6).map((item, index) => (
+              <Text
+                key={item.value}
+                color={index === suggestionIndex ? accent : undefined}
+              >
+                {index === suggestionIndex ? "›" : " "} {item.label}{" "}
+                <Text dimColor>{item.disabled ?? item.context}</Text>
+              </Text>
+            ))
+          )}
+          <Text dimColor>
+            ↑↓ choose · Tab complete · Enter select · Esc dismiss
+          </Text>
         </Box>
       )}
-
-      {!state.overlay &&
-        !state.pendingDecision &&
-        (suggestions.length > 0 || suggestionsLoading) && (
-          <Box flexDirection="column" marginTop={1}>
-            {suggestionsLoading ? (
-              <Text dimColor>Loading suggestions…</Text>
-            ) : (
-              suggestions.slice(0, 6).map((item, index) => (
-                <Text
-                  key={item.value}
-                  color={index === suggestionIndex ? accent : undefined}
-                >
-                  {index === suggestionIndex ? "›" : " "} {item.label}{" "}
-                  <Text dimColor>{item.disabled ?? item.context}</Text>
-                </Text>
-              ))
-            )}
-            <Text dimColor>
-              ↑↓ choose · Tab complete · Enter select · Esc dismiss
-            </Text>
-          </Box>
-        )}
-      <Box marginTop={1} borderStyle="single" borderColor={accent} paddingX={1}>
-        <Text color={accent}>preflight › </Text>
+      {!state.busy && !overlay && !state.pendingDecision && !menuOpen && (
+        <Text dimColor>{presenter.recommendation(header)}</Text>
+      )}
+      <Box borderStyle="single" borderColor={accent} paddingX={1}>
+        <Text color={accent}>› </Text>
         <TextInput
           value={input}
           onChange={onInput}
           onSubmit={onSubmit}
-          focus={!state.busy && !state.pendingDecision && !state.overlay}
-          placeholder={
-            state.busy ? "Working…" : "Ask about this repository or type /help"
-          }
+          focus={!state.pendingDecision && !overlay}
+          placeholder="Ask about this repository, or type /"
         />
       </Box>
+      <Text dimColor wrap="truncate-end">
+        {header?.providerAvailability === "ready"
+          ? `Reviewer: ${header.provider} · ${header.providerModel ?? "default model"} · ${header.providerVariant ?? "default effort"} · ${header.providerPrivacy ?? "provider"} · ${header.reviewMode.replace("_plus", "+")}`
+          : `Reviewer unavailable: ${header?.providerAuthentication === "required" ? "authentication required" : "setup needed"} · /provider to fix`}
+      </Text>
       <Text dimColor>
-        {narrow
-          ? "/help · ↑↓ history · Ctrl+C cancel"
-          : "/files · /commits · /reviewstaged · /mode · /help · ↑↓ history · Ctrl+C cancel/exit"}
+        /help · PgUp/PgDn history · Esc interrupt · Ctrl+C exit
       </Text>
     </Box>
   );
@@ -325,6 +255,7 @@ export function SessionView({
 export function App({
   repositoryPath,
   controller: supplied,
+  terminal,
 }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const { setRawMode } = useStdin();
@@ -339,9 +270,11 @@ export function App({
           setTerminalHandoff(true);
           await new Promise<void>((resolve) => setImmediate(resolve));
           setRawMode(false);
+          terminal?.suspend();
           try {
             await loginProvider(provider);
           } finally {
+            terminal?.resume();
             setRawMode(true);
             setTerminalHandoff(false);
           }
@@ -350,14 +283,18 @@ export function App({
   );
   const [state, setState] = useState<SessionState>(controller.state);
   const [input, setInput] = useState("");
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
 
   useEffect(() => {
+    if (terminal) terminal.onExit = () => controller.dispose();
     let current = true;
-    if (!input.startsWith("/")) {
+    if (!input.startsWith("/") || suggestionsDismissed) {
       setSuggestions([]);
+      setSuggestionsLoading(false);
       return;
     }
     setSuggestionsLoading(true);
@@ -378,7 +315,11 @@ export function App({
     return () => {
       current = false;
     };
-  }, [input, controller]);
+  }, [input, controller, suggestionsDismissed]);
+  useEffect(
+    () => setScrollOffset(0),
+    [state.overlay?.title, state.pendingDecision?.id],
+  );
   const [dimensions, setDimensions] = useState({
     width: stdout.columns ?? 100,
     height: stdout.rows ?? 40,
@@ -411,11 +352,22 @@ export function App({
 
   useInput(
     (value, key) => {
-      if (suggestions.length && !state.overlay && !state.pendingDecision) {
+      if (key.ctrl && value === "c") {
+        controller.dispose();
+        exit();
+        return;
+      }
+      if (
+        (suggestions.length || suggestionsLoading) &&
+        !state.overlay &&
+        !state.pendingDecision
+      ) {
         if (key.escape) {
           setSuggestions([]);
+          setSuggestionsDismissed(true);
           return;
         }
+        if (!suggestions.length) return;
         if (key.upArrow) {
           setSuggestionIndex(
             (index) => (index + suggestions.length - 1) % suggestions.length,
@@ -431,8 +383,34 @@ export function App({
           return;
         }
       }
-      if (key.ctrl && value === "c") controller.cancel();
-      if (key.escape && state.overlay) void controller.submit("/close");
+      if (key.escape) {
+        if (state.overlay) {
+          void controller.submit("/close");
+          return;
+        }
+        if (input) {
+          setInput("");
+          return;
+        }
+        if (state.pendingDecision) {
+          void controller.confirm(state.pendingDecision.id, false);
+          return;
+        }
+        controller.interrupt();
+        return;
+      }
+      if (key.pageUp)
+        setScrollOffset((offset) =>
+          state.overlay || state.pendingDecision
+            ? Math.max(0, offset - 5)
+            : offset + 5,
+        );
+      if (key.pageDown)
+        setScrollOffset((offset) =>
+          state.overlay || state.pendingDecision
+            ? offset + 5
+            : Math.max(0, offset - 5),
+        );
       if (!state.overlay && !state.pendingDecision && !state.busy) {
         if (key.upArrow) setInput(controller.history("previous"));
         if (key.downArrow) setInput(controller.history("next"));
@@ -445,6 +423,8 @@ export function App({
   );
 
   const submit = (value: string): void => {
+    if (state.busy) return;
+    setScrollOffset(0);
     const choice = suggestions[suggestionIndex];
     if (!state.overlay && choice) {
       if (choice.disabled) return;
@@ -463,7 +443,10 @@ export function App({
     <SessionView
       state={state}
       input={input}
-      onInput={setInput}
+      onInput={(value) => {
+        setSuggestionsDismissed(false);
+        setInput(value);
+      }}
       onSubmit={submit}
       onSelect={(action) => {
         void controller.select(action);
@@ -475,6 +458,12 @@ export function App({
       terminalHeight={dimensions.height}
       colorEnabled={!process.env.NO_COLOR}
       terminalHandoff={terminalHandoff}
+      fullscreen={terminal?.enabled}
+      animate={
+        interactiveEffects(Boolean(stdout.isTTY)) &&
+        process.env.PREFLIGHT_NO_ANIMATION !== "1"
+      }
+      scrollOffset={scrollOffset}
     />
   );
 }

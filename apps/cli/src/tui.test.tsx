@@ -61,7 +61,7 @@ describe("SessionView", () => {
     expect(frame).toContain("PREFLIGHT");
     expect(frame).toContain("code-preflight");
     expect(frame).toContain("feature/auth");
-    expect(frame).toContain("provider Codex CLI [ready]");
+    expect(frame).toContain("Reviewer: Codex CLI");
     expect(frame).toContain("Expired tokens are accepted");
     expect(frame).toContain("explain finding 1");
   });

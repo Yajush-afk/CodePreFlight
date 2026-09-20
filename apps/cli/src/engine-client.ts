@@ -269,7 +269,11 @@ class EngineConnection {
   }
 
   private killProcessGroup(signal: NodeJS.Signals): void {
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+    if (
+      process.platform === "win32" &&
+      (this.child.exitCode !== null || this.child.signalCode !== null)
+    )
+      return;
     try {
       if (this.child.pid && process.platform !== "win32") {
         process.kill(-this.child.pid, signal);
