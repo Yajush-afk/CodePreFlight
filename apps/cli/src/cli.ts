@@ -51,8 +51,12 @@ function printFullScanManifest(event: EngineEvent): void {
     `Full scan manifest: ${String(manifest.eligibleFiles)} eligible; ` +
       `${String(manifest.excludedFiles)} excluded; ${String(manifest.redactions)} redactions; ` +
       `${String(manifest.totalSelectedCharacters)} selected characters; ` +
-      `${String(manifest.providerRequests)} planned provider requests; ` +
-      `destination ${String(manifest.destination)} (${String(manifest.privacyCategory)}).\n`,
+      `approximately ${String(manifest.providerRequests)} provider requests (repair may add requests); ` +
+      `destination ${String(manifest.destination)} (${String(manifest.privacyCategory)}).\n` +
+      `Reviewer: ${String(manifest.provider)} · ${String(manifest.model)} · ${String(manifest.variant ?? "default")}\n` +
+      `Planned checks: ${JSON.stringify(manifest.plannedChecks)}\n` +
+      `Cache available: ${manifest.cacheHit ? "yes" : "no"}\n` +
+      `Preview fingerprint: ${String(manifest.planFingerprint)}\n`,
   );
 }
 
@@ -97,9 +101,15 @@ scan
   .description("scan a clean synchronized configured base branch")
   .option("--provider <provider>", "override the configured provider")
   .option("--yes", "approve this full scan after reviewing its manifest")
+  .option("--plan <fingerprint>", "fingerprint of the scan preview you approve")
   .option("--json", "print machine-readable JSON")
   .action(
-    async (options: { provider?: string; yes?: boolean; json?: boolean }) => {
+    async (options: {
+      provider?: string;
+      yes?: boolean;
+      json?: boolean;
+      plan?: string;
+    }) => {
       try {
         const result = await client.request(
           "scan",
@@ -108,6 +118,7 @@ scan
             action: "full",
             provider: options.provider,
             fullScanApproved: Boolean(options.yes),
+            planFingerprint: options.plan,
           },
           (event) => {
             printFullScanManifest(event);
@@ -130,7 +141,7 @@ scan
           error.code === "full_scan_confirmation_required"
         ) {
           process.stderr.write(
-            "Rerun with --yes only after reviewing the full-scan manifest.\n",
+            `Rerun with --yes --plan ${String(error.details?.planFingerprint ?? "<fingerprint>")} only after reviewing this manifest.\n`,
           );
         }
         process.exitCode = 2;

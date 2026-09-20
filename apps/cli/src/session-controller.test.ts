@@ -521,7 +521,7 @@ describe("SessionController", () => {
     const decision = controller.state.pendingDecision;
     expect(decision?.body).toContain("12 eligible files");
     expect(decision?.body).toContain(
-      "This approval is only for this full scan",
+      "This approval is only for this exact full scan",
     );
 
     await controller.confirm(decision!.id, true);

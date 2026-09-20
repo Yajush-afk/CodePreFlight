@@ -16,13 +16,14 @@ from .context import BINARY_SUFFIXES, DEFAULT_IGNORES
 from .errors import CodePreflightError
 from .finding_schema import parse_provider_response, provider_output_schema
 from .git import GitRunner
-from .models import CheckDefinition, ProviderAvailability, ProviderKind
+from .models import CheckDefinition, ProviderKind
+from .readiness import ProviderHealth, review_readiness
 from .repository import RepositoryInspector
 from .secrets import redact_secrets, verify_with_external_scanner
 from .trust import is_trusted
 from .verification import FindingVerifier
 
-SCAN_PROMPT_VERSION = "full-scan-v1"
+SCAN_PROMPT_VERSION = "full-scan-v2"
 DEFAULT_BATCH_CHARACTERS = 40_000
 DEFAULT_MAX_FILE_BYTES = 500_000
 
@@ -36,45 +37,82 @@ class FullScanOrchestrator:
         payload: dict[str, Any],
         emit: Any,
     ) -> dict[str, Any]:
+        plan = self.plan(path, payload)
+        manifest = plan["manifest"]
+        if payload.get("action") == "plan":
+            return {"manifest": manifest, "planFingerprint": plan["fingerprint"]}
+        emit(
+            "consent_required",
+            {
+                "fullScan": True,
+                "provider": plan["provider"].model_dump(mode="json"),
+                "manifest": manifest,
+            },
+        )
+        if not payload.get("fullScanApproved"):
+            raise CodePreflightError(
+                "full_scan_confirmation_required",
+                "Review and approve this exact scan preview",
+                recoverable=True,
+                details={
+                    "planFingerprint": plan["fingerprint"],
+                    "actions": [{"type": "approve_transmission", "scope": "full_scan"}],
+                },
+            )
+        if payload.get("planFingerprint") != plan["fingerprint"]:
+            raise CodePreflightError(
+                "scan_plan_stale",
+                "Scan preview changed or is missing; preview and approve again",
+                recoverable=True,
+            )
+        try:
+            result = self._execute(plan, emit)
+        except CodePreflightError as error:
+            if error.code.startswith("provider_"):
+                ProviderHealth(plan["root"]).invalidate(plan["provider"])
+            raise
+        ProviderHealth(plan["root"]).record(plan["provider"], plan["config"])
+        return result
+
+    def plan(self, path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+        """Read-only preview: never runs configured checks or review requests."""
         snapshot = RepositoryInspector().inspect(path)
         root = Path(snapshot.root)
-        self._guard(root, snapshot)
         config = load_config(root)
-        if config.get("checks") and not is_trusted(root):
-            raise CodePreflightError(
-                "repository_not_trusted",
-                "Approve repository checks before a full scan",
-                recoverable=True,
-                details={"actions": [{"type": "trust_repository"}]},
-            )
         provider_id = str(
             payload.get("provider") or config.get("review", {}).get("provider", "ollama")
         )
         adapter = ProviderRegistry(config).adapter(provider_id)
         provider = adapter.descriptor
-        if provider.availability != ProviderAvailability.READY:
+        readiness = review_readiness(
+            provider,
+            verified=ProviderHealth(root).verified(provider, config),
+            require_verified=True,
+        )
+        blockers = [*readiness["blockers"], *self._guard_blockers(root, snapshot)]
+        if (
+            config.get("checks") or provider.kind == ProviderKind.SUBSCRIPTION_CLI
+        ) and not is_trusted(root):
+            blockers.append(
+                {
+                    "code": "repository_not_trusted",
+                    "message": "Approve repository trust",
+                    "action": {"type": "trust_repository"},
+                }
+            )
+        if blockers:
             raise CodePreflightError(
-                "provider_unavailable",
-                f"Provider {provider.name} is not ready for a full scan",
+                "scan_blocked",
+                "; ".join(item["message"] for item in blockers),
                 recoverable=True,
                 details={
-                    "provider": provider.model_dump(mode="json"),
-                    "actions": [{"type": "select_provider"}],
+                    "blockers": blockers,
+                    "actions": [item.get("action", {"type": "retry"}) for item in blockers],
                 },
             )
-        if provider.kind == ProviderKind.SUBSCRIPTION_CLI and not is_trusted(root):
-            raise CodePreflightError(
-                "repository_not_trusted",
-                "Trust this repository before invoking an authenticated provider CLI",
-                recoverable=True,
-                details={"actions": [{"type": "trust_repository"}]},
-            )
 
-        emit("scan_progress", {"stage": "inventory", "message": "Mapping tracked files"})
         inventory = self._inventory(root, config)
-        checks = CheckRunner().run(
-            root, [CheckDefinition.model_validate(item) for item in config.get("checks", [])]
-        )
+        planned_checks = [CheckDefinition.model_validate(item) for item in config.get("checks", [])]
         repository_map = self._repository_map(snapshot, inventory)
         batch_limit = self._batch_limit(payload, config)
         batches = self._batches(inventory["selected"], batch_limit)
@@ -84,15 +122,15 @@ class FullScanOrchestrator:
             config,
             provider.model_dump(mode="json"),
             batch_limit,
-            checks,
+            planned_checks,
         )
         cache = self._cache_directory(root, fingerprint)
         final_path = cache / "result.json"
         cached = self._read_json(final_path)
-        if cached:
-            return {**cached, "cacheHit": True}
-
         manifest = {
+            "planFingerprint": fingerprint,
+            "cacheHit": bool(cached),
+            "plannedChecks": [item.model_dump(mode="json") for item in planned_checks],
             "repositoryHead": GitRunner(root).run("rev-parse", "HEAD").stdout.strip(),
             "baseBranch": snapshot.base_branch,
             "upstream": snapshot.upstream,
@@ -103,6 +141,7 @@ class FullScanOrchestrator:
             "totalSelectedCharacters": inventory["characters"],
             "batches": len(batches),
             "providerRequests": len(batches) + 1,
+            "providerRequestsEstimated": True,
             "batchManifest": [
                 {
                     "batch": index + 1,
@@ -114,25 +153,41 @@ class FullScanOrchestrator:
             "provider": provider.name,
             "providerId": provider.id,
             "model": provider.model_name,
+            "variant": provider.variant_name,
             "destination": "local" if not provider.sends_code_remotely else provider.name,
             "privacyCategory": provider.kind.value,
             "files": inventory["files"],
         }
-        emit(
-            "consent_required",
-            {
-                "fullScan": True,
-                "provider": provider.model_dump(mode="json"),
-                "manifest": manifest,
-            },
+        return {
+            "manifest": manifest,
+            "fingerprint": fingerprint,
+            "root": root,
+            "config": config,
+            "adapter": adapter,
+            "provider": provider,
+            "inventory": inventory,
+            "planned_checks": planned_checks,
+            "repository_map": repository_map,
+            "batches": batches,
+            "cache": cache,
+            "cached": cached,
+            "final_path": final_path,
+        }
+
+    def _execute(self, plan: dict[str, Any], emit: Any) -> dict[str, Any]:
+        root, config, adapter, provider = (
+            plan[key] for key in ("root", "config", "adapter", "provider")
         )
-        if not bool(payload.get("fullScanApproved")):
-            raise CodePreflightError(
-                "full_scan_confirmation_required",
-                "Review the full-scan manifest and approve this scan explicitly",
-                recoverable=True,
-                details={"actions": [{"type": "approve_transmission", "scope": "full_scan"}]},
-            )
+        inventory, planned_checks, repository_map, batches = (
+            plan[key] for key in ("inventory", "planned_checks", "repository_map", "batches")
+        )
+        cache, cached, final_path, manifest, fingerprint = (
+            plan[key] for key in ("cache", "cached", "final_path", "manifest", "fingerprint")
+        )
+        if cached:
+            return {**cached, "cacheHit": True}
+
+        checks = CheckRunner().run(root, planned_checks)
 
         verify_with_external_scanner("\n".join(inventory["selected"].values()))
         drafts = []
@@ -206,38 +261,44 @@ class FullScanOrchestrator:
         self._atomic_json(final_path, result)
         return result
 
-    def _guard(self, root: Path, snapshot: Any) -> None:
+    def _guard_blockers(self, root: Path, snapshot: Any) -> list[dict[str, Any]]:
+        blockers: list[dict[str, Any]] = []
+
+        def block(code: str, message: str, details: dict[str, Any] | None = None) -> None:
+            blockers.append({"code": code, "message": message, **(details or {})})
+
         if not snapshot.branch:
-            self._guard_error("full_scan_detached", "Full scan requires a named base branch")
+            block("full_scan_detached", "Full scan requires a named base branch")
         if not snapshot.base_branch or snapshot.branch != snapshot.base_branch:
-            self._guard_error(
+            block(
                 "full_scan_base_branch_required",
                 "Switch to the configured base branch "
                 f"({snapshot.base_branch or 'not configured'})",
             )
         dirty = [item.path for item in snapshot.files if not item.ignored]
         if dirty:
-            self._guard_error(
+            block(
                 "full_scan_worktree_dirty",
                 "Commit or remove working-tree and index changes before a full scan",
                 {"paths": dirty[:100]},
             )
         if snapshot.conflicts or self._active_operation(root):
-            self._guard_error(
+            block(
                 "full_scan_git_operation_active",
                 "Resolve the active Git operation and conflicts before a full scan",
             )
         if not snapshot.upstream:
-            self._guard_error(
+            block(
                 "full_scan_upstream_required",
                 "Configure an upstream for the base branch before a full scan",
             )
         if snapshot.ahead or snapshot.behind:
-            self._guard_error(
+            block(
                 "full_scan_not_synchronized",
                 "Base branch must be zero ahead and zero behind its locally known upstream",
                 {"ahead": snapshot.ahead, "behind": snapshot.behind},
             )
+        return blockers
 
     def _guard_error(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         raise CodePreflightError(
@@ -424,11 +485,13 @@ class FullScanOrchestrator:
         checks: list[Any],
     ) -> str:
         material = {
+            "repository": str(root.resolve()),
             "head": GitRunner(root).run("rev-parse", "HEAD").stdout.strip(),
             "files": {
                 path: hashlib.sha256(content.encode()).hexdigest()
                 for path, content in inventory["selected"].items()
             },
+            "inventory": inventory["files"],
             "config": config,
             "provider": provider,
             "batchLimit": batch_limit,
