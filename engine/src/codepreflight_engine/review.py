@@ -18,13 +18,13 @@ from .git import GitRunner
 from .models import (
     BlastRadiusItem,
     Finding,
-    ProviderAvailability,
     ProviderKind,
     ReviewFailure,
     ReviewResult,
     Severity,
     VerificationState,
 )
+from .readiness import ProviderHealth, require_review_ready
 from .trust import is_trusted
 from .verification import FindingVerifier
 
@@ -63,6 +63,12 @@ class ReviewOrchestrator:
         emit: EventEmitter,
     ) -> ReviewResult:
         config = load_config(root)
+        selected_id = str(
+            payload.get("provider") or config.get("review", {}).get("provider", "ollama")
+        )
+        adapter = ProviderRegistry(config).adapter(selected_id)
+        provider = adapter.descriptor
+        require_review_ready(root, provider, config, evidence=bool(payload.get("automation")))
         if config.get("checks") and not is_trusted(root):
             raise CodePreflightError(
                 "repository_not_trusted",
@@ -90,29 +96,6 @@ class ReviewOrchestrator:
             revision=revision,
             comparison_note=comparison_note,
         )
-        provider_id = str(
-            payload.get("provider") or config.get("review", {}).get("provider", "ollama")
-        )
-        adapter = ProviderRegistry(config).adapter(provider_id)
-        provider = adapter.descriptor
-        if provider.availability != ProviderAvailability.READY:
-            actions: list[dict[str, str]] = [{"type": "select_provider"}]
-            if provider.id == "ollama" and provider.model_name:
-                actions.insert(
-                    0,
-                    {
-                        "type": "pull_ollama_model",
-                        "provider": "ollama",
-                        "model": provider.model_name,
-                    },
-                )
-            raise CodePreflightError(
-                "provider_unavailable",
-                f"Provider {provider.name} is not review-capable: "
-                f"{provider.detail or provider.availability.value}",
-                recoverable=True,
-                details={"provider": provider.model_dump(mode="json"), "actions": actions},
-            )
         if provider.kind == ProviderKind.SUBSCRIPTION_CLI and not is_trusted(root):
             raise CodePreflightError(
                 "repository_not_trusted",
@@ -168,9 +151,15 @@ class ReviewOrchestrator:
             )
 
         emit("progress", {"message": f"Requesting review from {provider.name}"})
-        raw_output = adapter.review(
-            self._prompt(context.content, depth, blast_radius), provider_output_schema()
-        )
+        health = ProviderHealth(root)
+        health.invalidate(provider)
+        try:
+            raw_output = adapter.review(
+                self._prompt(context.content, depth, blast_radius), provider_output_schema()
+            )
+        except Exception:
+            health.invalidate(provider)
+            raise
         emit("provider_delta", {"characters": len(raw_output)})
         try:
             response = parse_provider_response(raw_output)
@@ -228,6 +217,7 @@ class ReviewOrchestrator:
         )
         if bool(config.get("cache", {}).get("enabled", True)):
             cache.put(result)
+        health.record(provider, config)
         return result
 
     def _prompt(self, context: str, depth: str, blast_radius: list[BlastRadiusItem]) -> str:

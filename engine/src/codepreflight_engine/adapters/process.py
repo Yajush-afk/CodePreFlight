@@ -23,6 +23,18 @@ ALLOWED_ENVIRONMENT = {
     "CLAUDE_CONFIG_DIR",
     "OPENCODE_CONFIG",
     "OPENCODE_CONFIG_DIR",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "all_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
 }
 
 

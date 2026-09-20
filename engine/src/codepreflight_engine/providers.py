@@ -26,9 +26,20 @@ CLI_PROVIDERS = (
 )
 
 REQUIRED_FLAGS = {
-    "codex": ("--output-schema", "--sandbox", "--ephemeral"),
-    "opencode": ("--format", "--dir", "--pure"),
-    "claude": ("--output-format", "--disallowedTools", "--permission-mode"),
+    "codex": (
+        "--output-schema",
+        "--sandbox",
+        "--ephemeral",
+        "--cd",
+        "--skip-git-repo-check",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--output-last-message",
+        "--model",
+        "--config",
+    ),
+    "opencode": ("--format", "--dir", "--pure", "--model", "--variant"),
+    "claude": ("--output-format", "--disallowedTools", "--permission-mode", "--model"),
 }
 
 
@@ -203,7 +214,7 @@ def _health(executable: str, provider_config: dict[str, Any]) -> dict[str, Any]:
         "model": ModelState.SELECTION_REQUIRED if model_required else ModelState.NOT_APPLICABLE,
         "model_name": configured_model,
         "variant_name": provider_config.get("variant"),
-        "invocation": InvocationState.VERIFIED if authenticated else InvocationState.UNTESTED,
+        "invocation": InvocationState.UNTESTED,
         "availability": ProviderAvailability.READY if ready else ProviderAvailability.DEGRADED,
         "detail": (
             "authentication verified; select a standard-tier model"

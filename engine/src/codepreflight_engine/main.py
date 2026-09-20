@@ -28,6 +28,7 @@ from .protocol_generated import ENGINE_COMMANDS, PROTOCOL_VERSION
 from .provider_setup import configure_provider, provider_models, provider_variants
 from .providers import discover_providers
 from .pull_request import prepare_pull_request
+from .readiness import ProviderHealth, review_readiness
 from .repository import RepositoryInspector
 from .review import ReviewOrchestrator
 from .scan import FullScanOrchestrator
@@ -133,6 +134,7 @@ def dispatch(request: EngineRequest) -> None:
                         "provider": scope["provider"],
                         "remoteApproved": True,
                         "hook": True,
+                        "automation": True,
                     },
                     lambda event, payload: request_event(request.requestId, event, payload),
                 )
@@ -193,7 +195,7 @@ def dispatch(request: EngineRequest) -> None:
                 }
                 review_result = ReviewOrchestrator().review(
                     root,
-                    review_payload,
+                    {**review_payload, "automation": True},
                     lambda event, payload: request_event(request.requestId, event, payload),
                 )
                 completed = manager.update_job(
@@ -258,10 +260,16 @@ def dispatch(request: EngineRequest) -> None:
                 raise CodePreflightError(
                     "provider_required", "A provider is required for a smoke test"
                 )
-            complete(
-                request.requestId,
-                ProviderRegistry(config).smoke_test(provider_id),
-            )
+            registry = ProviderRegistry(config)
+            health = ProviderHealth(provider_root)
+            descriptor = registry.adapter(provider_id).descriptor
+            try:
+                tested = registry.smoke_test(provider_id)
+            except Exception:
+                health.invalidate(descriptor)
+                raise
+            health.record(descriptor, config)
+            complete(request.requestId, tested)
             return
         if action == "models":
             complete(request.requestId, provider_models(str(request.payload.get("provider", ""))))
@@ -305,7 +313,14 @@ def dispatch(request: EngineRequest) -> None:
             request.requestId,
             {
                 "providers": [
-                    provider.model_dump(mode="json") for provider in discover_providers(config)
+                    {
+                        **provider.model_dump(mode="json"),
+                        "readiness": review_readiness(
+                            provider,
+                            verified=ProviderHealth(provider_root).verified(provider, config),
+                        ),
+                    }
+                    for provider in discover_providers(config)
                 ]
             },
         )
