@@ -31,6 +31,10 @@ preflight provider variants opencode --model <provider/model>
 preflight provider use opencode --model <provider/model> --variant <variant> --write
 ```
 
+These commands default to a private per-repository preference under `.git/codepreflight/`.
+Add `--global` to make the selection your machine-wide default. Add `--team` only when the
+team intentionally wants to commit the provider choice in `.codepreflight.toml`.
+
 The login process belongs to the provider CLI. The TUI temporarily yields terminal control, then
 verifies authentication with the provider-owned status command and refreshes readiness. OpenCode
 requires an explicit standard-tier model selection after authentication. Claude CLI reuse is
@@ -56,7 +60,8 @@ provider becomes review-capable.
 ## API providers
 
 API configuration stores only the environment-variable name, model, and endpoint. Export the
-credential in the shell or a secret manager; never place its value in `.codepreflight.toml`.
+credential in the shell or a secret manager; never place its value in any CodePreFlight
+configuration file.
 
 Before a remote interactive request, the session shows destination, selected context size,
 redactions, and the context manifest. Consent lasts for that provider and open session only.

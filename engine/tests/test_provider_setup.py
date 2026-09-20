@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from codepreflight_engine.config import personal_config_path
 from codepreflight_engine.initialize import initialize_repository
 from codepreflight_engine.provider_setup import (
     configure_provider,
@@ -19,7 +20,7 @@ def test_provider_configuration_previews_without_writing(git_repository: Path) -
         git_repository,
         provider_id="ollama",
         model="qwen2.5-coder:7b",
-        global_scope=False,
+        scope="personal",
         write=False,
     )
 
@@ -28,9 +29,10 @@ def test_provider_configuration_previews_without_writing(git_repository: Path) -
     assert "[providers.ollama]" in result["preview"]
     assert 'model = "qwen2.5-coder:7b"' in result["preview"]
     assert not (git_repository / ".codepreflight.toml").exists()
+    assert result["path"] == str(personal_config_path(git_repository))
 
 
-def test_provider_configuration_preserves_settings_and_invalidates_trust(
+def test_personal_provider_configuration_preserves_team_settings_and_trust(
     git_repository: Path,
 ) -> None:
     initialize_repository(git_repository, write=True)
@@ -40,14 +42,16 @@ def test_provider_configuration_preserves_settings_and_invalidates_trust(
         git_repository,
         provider_id="opencode",
         model=None,
-        global_scope=False,
+        scope="personal",
         write=True,
     )
 
-    content = (git_repository / ".codepreflight.toml").read_text(encoding="utf-8")
-    assert 'provider = "opencode"' in content
-    assert "context_limit = 60000" in content
-    assert is_trusted(git_repository) is False
+    team_content = (git_repository / ".codepreflight.toml").read_text(encoding="utf-8")
+    personal_content = personal_config_path(git_repository).read_text(encoding="utf-8")
+    assert 'provider = "opencode"' in personal_content
+    assert "context_limit = 60000" in team_content
+    assert 'provider = "opencode"' not in team_content
+    assert is_trusted(git_repository) is True
 
 
 def test_ollama_models_are_reported_without_repository_content(
@@ -154,12 +158,12 @@ def test_provider_configuration_saves_variant_and_rejects_fast_model(
         provider_id="codex",
         model="gpt-economy",
         variant="high",
-        global_scope=False,
+        scope="personal",
         write=True,
     )
 
     assert result["variant"] == "high"
-    content = (git_repository / ".codepreflight.toml").read_text(encoding="utf-8")
+    content = personal_config_path(git_repository).read_text(encoding="utf-8")
     assert 'model = "gpt-economy"' in content
     assert 'variant = "high"' in content
 
@@ -169,6 +173,20 @@ def test_provider_configuration_saves_variant_and_rejects_fast_model(
             provider_id="opencode",
             model="openai/gpt-economy-fast",
             variant=None,
-            global_scope=False,
+            scope="personal",
             write=False,
         )
+
+
+def test_team_provider_configuration_is_explicit(git_repository: Path) -> None:
+    result = configure_provider(
+        git_repository,
+        provider_id="codex",
+        model="gpt-economy",
+        scope="team",
+        write=True,
+    )
+
+    assert result["scope"] == "team"
+    assert (git_repository / ".codepreflight.toml").exists()
+    assert not personal_config_path(git_repository).exists()

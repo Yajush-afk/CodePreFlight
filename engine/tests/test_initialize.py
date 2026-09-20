@@ -1,10 +1,6 @@
 from pathlib import Path
 
-import pytest
-
-from codepreflight_engine import initialize
 from codepreflight_engine.initialize import initialize_repository
-from codepreflight_engine.models import ProviderAvailability, ProviderDescriptor, ProviderKind
 from codepreflight_engine.trust import is_trusted
 
 
@@ -40,30 +36,18 @@ def test_existing_configuration_can_be_reviewed_and_retrusted(git_repository: Pa
     assert is_trusted(git_repository) is True
 
 
-def test_initialization_selects_an_actually_ready_provider(
-    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+def test_repository_without_team_configuration_can_be_trusted_privately(
+    git_repository: Path,
 ) -> None:
-    monkeypatch.setattr(
-        initialize,
-        "discover_providers",
-        lambda config=None: [
-            ProviderDescriptor(
-                id="ollama",
-                name="Ollama",
-                kind=ProviderKind.LOCAL,
-                availability=ProviderAvailability.DEGRADED,
-                sends_code_remotely=False,
-            ),
-            ProviderDescriptor(
-                id="codex",
-                name="Codex CLI",
-                kind=ProviderKind.SUBSCRIPTION_CLI,
-                availability=ProviderAvailability.READY,
-                sends_code_remotely=True,
-            ),
-        ],
-    )
+    result = initialize_repository(git_repository, write=False, trust=True)
 
+    assert result["trusted"] is True
+    assert result["preview"] == ""
+    assert not (git_repository / ".codepreflight.toml").exists()
+    assert is_trusted(git_repository) is True
+
+
+def test_team_initialization_does_not_capture_a_personal_provider(git_repository: Path) -> None:
     result = initialize_repository(git_repository, write=False)
 
-    assert result["configuration"]["review"]["provider"] == "codex"
+    assert "provider" not in result["configuration"]["review"]

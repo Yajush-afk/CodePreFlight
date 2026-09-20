@@ -496,12 +496,16 @@ provider
 
 provider
   .command("use <provider>")
-  .description("preview or save a non-secret default provider and model")
+  .description("preview or save a private repository provider and model")
   .option("--model <model>", "select a provider model")
   .option("--variant <variant>", "select the model reasoning variant")
   .option(
     "--global",
-    "write the XDG user configuration instead of repository configuration",
+    "write the XDG user configuration as the default for all repositories",
+  )
+  .option(
+    "--team",
+    "write the shareable .codepreflight.toml instead of a private preference",
   )
   .option("--write", "apply the previewed configuration")
   .option("--json", "print machine-readable JSON")
@@ -512,10 +516,16 @@ provider
         model?: string;
         variant?: string;
         global?: boolean;
+        team?: boolean;
         write?: boolean;
         json?: boolean;
       },
     ) => {
+      if (options.global && options.team) {
+        process.stderr.write("Choose either --global or --team, not both.\n");
+        process.exitCode = 2;
+        return;
+      }
       try {
         const result = await client.request(
           "provider",
@@ -525,7 +535,11 @@ provider
             provider: providerId,
             model: options.model,
             variant: options.variant,
-            global: Boolean(options.global),
+            scope: options.global
+              ? "global"
+              : options.team
+                ? "team"
+                : "personal",
             write: Boolean(options.write),
           },
         );
@@ -564,15 +578,40 @@ provider
 
 program
   .command("init")
-  .description("detect and configure CodePreFlight for this repository")
-  .option("--write", "write the proposed repository configuration and trust it")
+  .description("preview or create optional shared team configuration")
+  .option("--team", "work with the shareable .codepreflight.toml")
+  .option("--write", "write the proposed team configuration and trust it")
   .option(
     "--trust",
-    "trust an existing repository configuration after reviewing it",
+    "privately trust this repository and any existing team configuration",
   )
   .option("--json", "print machine-readable JSON")
   .action(
-    async (options: { write?: boolean; trust?: boolean; json?: boolean }) => {
+    async (options: {
+      team?: boolean;
+      write?: boolean;
+      trust?: boolean;
+      json?: boolean;
+    }) => {
+      if (options.write && !options.team) {
+        process.stderr.write(
+          "Creating a repository file is now explicit; rerun with --team --write.\n",
+        );
+        process.exitCode = 2;
+        return;
+      }
+      if (!options.team && !options.trust) {
+        printValue(
+          {
+            configured: true,
+            repositoryFileCreated: false,
+            message:
+              "No repository file is required for personal use. Provider and model choices are stored privately under .git/codepreflight/. Use preflight init --trust when approving authenticated provider CLI access, or preflight init --team to preview an optional shared team configuration.",
+          },
+          Boolean(options.json),
+        );
+        return;
+      }
       try {
         const result = await client.request("init", resolve(process.cwd()), {
           write: Boolean(options.write),

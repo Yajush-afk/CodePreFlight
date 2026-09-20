@@ -11,7 +11,7 @@ From the CodePreFlight checkout:
 ```bash
 evaluation/demo/setup.sh
 cd <path printed by the script>
-preflight init --write
+preflight init --team --write
 preflight
 ```
 

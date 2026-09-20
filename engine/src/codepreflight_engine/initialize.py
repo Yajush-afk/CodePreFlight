@@ -10,8 +10,6 @@ import tomli_w
 from .base import BaseResolver
 from .config import load_config, repository_config_path
 from .errors import CodePreflightError
-from .models import ProviderAvailability
-from .providers import discover_providers
 from .trust import trust_repository
 
 
@@ -49,17 +47,7 @@ def propose_configuration(root: Path) -> dict[str, Any]:
             ]
         )
     base = BaseResolver().resolve(root, required=False)
-    ready_provider = next(
-        (
-            provider.id
-            for provider in discover_providers({})
-            if provider.availability == ProviderAvailability.READY
-        ),
-        None,
-    )
     review: dict[str, Any] = {"context_limit": 60000, "policy": "warning"}
-    if ready_provider:
-        review["provider"] = ready_provider
     config: dict[str, Any] = {
         "version": 1,
         "review": review,
@@ -88,8 +76,6 @@ def initialize_repository(root: Path, *, write: bool, trust: bool = False) -> di
         )
     path = repository_config_path(root)
     if trust:
-        if not path.exists():
-            raise CodePreflightError("config_missing", "No .codepreflight.toml exists to trust")
         config = load_config(root)
         trust_repository(root)
         return {
@@ -97,7 +83,7 @@ def initialize_repository(root: Path, *, write: bool, trust: bool = False) -> di
             "written": False,
             "trusted": True,
             "configuration": config,
-            "preview": path.read_text(encoding="utf-8"),
+            "preview": path.read_text(encoding="utf-8") if path.exists() else "",
         }
     config = propose_configuration(root)
     rendered = tomli_w.dumps(config)

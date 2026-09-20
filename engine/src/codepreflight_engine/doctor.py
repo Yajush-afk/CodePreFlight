@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .config import global_config_path, load_config, repository_config_path
+from .config import global_config_path, load_config, personal_config_path, repository_config_path
 from .errors import CodePreflightError
 from .local_log import local_log_path
 from .protocol_generated import PROTOCOL_VERSION
@@ -29,6 +29,7 @@ def doctor_report(repository_path: Path) -> dict[str, Any]:
     python_healthy = sys.version_info >= (3, 12)
     global_path = global_config_path()
     repository_path_config = repository_config_path(repository_path)
+    personal_path = personal_config_path(repository_path)
     config_error: str | None = None
     try:
         load_config(repository_path)
@@ -71,6 +72,10 @@ def doctor_report(repository_path: Path) -> dict[str, Any]:
             "repository": {
                 "path": str(repository_path_config),
                 "exists": repository_path_config.exists(),
+            },
+            "personal": {
+                "path": str(personal_path),
+                "exists": personal_path.exists(),
             },
         },
     }

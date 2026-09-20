@@ -375,6 +375,7 @@ describe("SessionController", () => {
         provider: "codex",
         model: undefined,
         variant: undefined,
+        scope: "personal",
         write: true,
       },
     });
