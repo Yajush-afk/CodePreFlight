@@ -24,7 +24,11 @@ class GitRunner:
         self.max_output_bytes = max_output_bytes
 
     def run(self, *args: str, check: bool = True, timeout: float = 20) -> GitResult:
-        mutating = args and args[0] in {"commit", "switch", "config", "update-ref"}
+        mutating = bool(args and args[0] in {"commit", "switch", "update-ref"})
+        if args and args[0] == "config":
+            mutating = not any(
+                flag in args for flag in ("--get", "--get-all", "--get-regexp", "--list", "-l")
+            )
         with operation(
             "Git", "repository", ["git", *args], mutability="mutating" if mutating else "read_only"
         ) as record:

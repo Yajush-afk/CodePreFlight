@@ -41,6 +41,10 @@ class GitGraphBuilder:
             "head": head or None,
             "base": base,
             "current": current,
+            "upstream": snapshot.upstream,
+            "ahead": snapshot.ahead,
+            "behind": snapshot.behind,
+            "conflicts": len(snapshot.conflicts),
             "workingTree": {
                 "staged": sum(item.staged for item in snapshot.files),
                 "unstaged": sum(item.unstaged for item in snapshot.files),

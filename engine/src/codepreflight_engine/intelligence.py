@@ -22,6 +22,7 @@ from .models import (
     ProviderKind,
     RepositoryAnswer,
 )
+from .readiness import consent_fingerprint, provider_destination, remote_approval_matches
 from .secrets import redact_secrets
 from .trust import is_trusted
 
@@ -60,7 +61,7 @@ class RepositoryIntelligence:
             )
         if mode == "history":
             evidence = self._history_context(root, payload)
-            self._authorize(adapter, payload, emit, characters=len(evidence))
+            self._authorize(adapter, payload, emit, config=config, characters=len(evidence))
             prompt = self._explanation_prompt(
                 "Explain why this code reached its current state using the supplied Git evidence.",
                 evidence,
@@ -81,6 +82,7 @@ class RepositoryIntelligence:
                 adapter,
                 payload,
                 emit,
+                config=config,
                 characters=context.manifest.total_characters,
                 redactions=context.manifest.redactions,
                 scanner=context.manifest.secret_scanner,
@@ -116,6 +118,7 @@ class RepositoryIntelligence:
                 adapter,
                 payload,
                 emit,
+                config=config,
                 characters=context.manifest.total_characters + len(history),
                 redactions=context.manifest.redactions,
                 scanner=context.manifest.secret_scanner,
@@ -152,6 +155,7 @@ class RepositoryIntelligence:
         payload: dict[str, Any],
         emit: EventEmitter | None,
         *,
+        config: dict[str, Any],
         characters: int,
         redactions: int = 0,
         scanner: str = "built-in",
@@ -161,6 +165,7 @@ class RepositoryIntelligence:
                 "consent_required",
                 {
                     "provider": adapter.descriptor.model_dump(mode="json"),
+                    "consentScope": consent_fingerprint(adapter.descriptor, config),
                     "manifest": {
                         "total_characters": characters,
                         "redactions": redactions,
@@ -169,10 +174,13 @@ class RepositoryIntelligence:
                     "destination": {
                         "kind": adapter.descriptor.kind.value,
                         "remote": adapter.descriptor.sends_code_remotely,
+                        "address": provider_destination(adapter.descriptor, config),
                     },
                 },
             )
-        if adapter.descriptor.sends_code_remotely and not bool(payload.get("remoteApproved")):
+        if adapter.descriptor.sends_code_remotely and not remote_approval_matches(
+            adapter.descriptor, config, payload
+        ):
             raise CodePreflightError(
                 "provider_consent_required",
                 f"{adapter.descriptor.name} may send repository evidence remotely; pass --approve",

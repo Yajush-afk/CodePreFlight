@@ -52,6 +52,7 @@ function printProviderDisclosure(event: EngineEvent): void {
     | undefined;
   process.stderr.write(
     `Provider disclosure: ${provider?.name ?? "unknown"} (${provider?.kind ?? "unknown"}); ` +
+      `destination ${String((event.payload?.destination as { address?: string } | undefined)?.address ?? provider?.name ?? "unknown")}; ` +
       `${manifest?.total_characters ?? event.payload?.contextCharacters ?? 0} context characters; ` +
       `${manifest?.redactions ?? event.payload?.redactions ?? 0} redactions; ` +
       `scanner ${manifest?.secret_scanner ?? "built-in"}.\n`,

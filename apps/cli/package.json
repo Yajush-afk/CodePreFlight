@@ -10,7 +10,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit && prettier --check \"src/**/*.{ts,tsx}\"",
     "dev": "tsx src/cli.ts",
-    "test": "vitest run"
+    "test": "vitest run src"
   },
   "dependencies": {
     "commander": "^14.0.0",

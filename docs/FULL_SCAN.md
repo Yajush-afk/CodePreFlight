@@ -15,3 +15,9 @@ the fingerprint automatically. Check commands run once, after approval, on a cac
 Request counts are estimates: malformed structured output can require repair requests.
 Synchronization uses local tracking references, without automatically fetching.
 Scan operations never authenticate, log out, change provider settings, or switch branches.
+
+Use `/scanfull` in the workspace. The preview includes source inclusion/exclusion reasons;
+PgUp/PgDn lets you inspect long manifests. Files with single lines too large for the selected
+batch budget are explicitly excluded rather than silently overflowing it. Check execution
+is followed by a repository-state validation before transmission, and state is checked again
+before evidence verification. Changed check results cannot reuse old partial batch results.

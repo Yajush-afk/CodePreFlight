@@ -9,8 +9,12 @@ preflight provider test codex --yes
 ```
 
 Provider readiness is reported separately for installation, authentication, model selection, and
-invocation compatibility. A running Ollama daemon without the configured model is degraded, not
-ready. CodePreFlight never silently replaces an invalid default.
+invocation compatibility. The workspace presents one result: Ready, Action required, or
+Unavailable. A running Ollama daemon without the configured model is not ready. CodePreFlight
+never silently replaces an invalid default. Authentication alone never verifies invocation.
+Successful synthetic tests and manual reviews record private, configuration-bound health
+evidence; scans and automation require it. Changing model, variant, executable/version, or
+destination invalidates that evidence.
 
 CodePreFlight uses provider standard service only. Fast-tier model aliases such as names ending in
 `-fast` are excluded from model selection and rejected in configuration. Model variants control
@@ -54,8 +58,9 @@ preflight provider use ollama --model qwen2.5-coder:7b --write
 preflight provider test ollama --yes
 ```
 
-Ollama is classified as local inference. The configured model must already exist before the
-provider becomes review-capable.
+Ollama is classified as local inference and requires a loopback endpoint. Remote Ollama URLs
+are rejected rather than mislabeled local. Readiness queries the configured endpoint;
+the configured model must already exist before the provider becomes review-capable.
 
 ## API providers
 
@@ -67,3 +72,21 @@ Before a remote interactive request, the session shows destination, selected con
 redactions, and the context manifest. Consent lasts for that provider and open session only.
 Full-repository scans always require a separate confirmation. Auto and Auto+ use a distinct scoped
 grant under `.git/codepreflight/automation-grant.json`; it contains no credentials.
+
+Preflight preserves standard proxy and TLS certificate environment settings for CLI
+invocation, without printing their values. It never runs provider logout. See [reset guidance](RESET.md)
+before clearing local state; doing so does not reset provider-owned sign-in.
+
+## Opt-in live validation
+
+Normal tests use synthetic fixtures without model usage. After configuring an installed
+provider, explicitly opt in to one synthetic live test from the project root:
+
+```bash
+CODEPREFLIGHT_LIVE_PROVIDERS=1 CODEPREFLIGHT_LIVE_PROVIDER=codex \
+  uv run --project engine pytest engine/tests/test_live_providers.py
+```
+
+This can consume provider usage but sends no repository content. It neither logs in nor
+logs out. Without the provider selector, all ready adapters are tested; unavailable adapters
+are skipped. An explicitly selected provider that is not ready fails with setup guidance.

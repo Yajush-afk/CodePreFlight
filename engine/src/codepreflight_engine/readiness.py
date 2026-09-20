@@ -1,15 +1,56 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .config import personal_config_path
 from .errors import CodePreflightError
 from .models import ProviderDescriptor
+
+
+def provider_destination(provider: ProviderDescriptor, config: dict[str, Any]) -> str:
+    defaults = {"ollama": "http://127.0.0.1:11434", "openai-compatible": "https://api.openai.com"}
+    endpoint = (
+        config.get("providers", {}).get(provider.id, {}).get("base_url", defaults.get(provider.id))
+    )
+    if not endpoint:
+        return provider.name
+    try:
+        parsed = urlsplit(endpoint)
+        hostname = parsed.hostname or "invalid endpoint"
+        port = f":{parsed.port}" if parsed.port else ""
+        return f"{parsed.scheme}://{hostname}{port}"
+    except ValueError:
+        return "invalid endpoint"
+
+
+def consent_fingerprint(provider: ProviderDescriptor, config: dict[str, Any]) -> str:
+    identity = {
+        "id": provider.id,
+        "kind": provider.kind.value,
+        "executable": provider.executable,
+        "version": provider.version,
+        "model": provider.model_name,
+        "variant": provider.variant_name,
+        "remote": provider.sends_code_remotely,
+        "settings": config.get("providers", {}).get(provider.id, {}),
+    }
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+def remote_approval_matches(
+    provider: ProviderDescriptor, config: dict[str, Any], payload: dict[str, Any]
+) -> bool:
+    return bool(payload.get("remoteApproved")) and (
+        "consentScope" not in payload
+        or payload["consentScope"] == consent_fingerprint(provider, config)
+    )
 
 
 class ProviderHealth:
@@ -39,16 +80,26 @@ class ProviderHealth:
         )
 
     def record(self, provider: ProviderDescriptor, config: dict[str, Any]) -> None:
-        records = self._read()
-        records[provider.id] = {
-            "fingerprint": self.fingerprint(provider, config),
-            "verifiedAt": datetime.now(UTC).isoformat(),
-        }
-        self._write(records)
+        self._update(
+            provider.id,
+            {
+                "fingerprint": self.fingerprint(provider, config),
+                "verifiedAt": datetime.now(UTC).isoformat(),
+            },
+        )
 
     def invalidate(self, provider: ProviderDescriptor) -> None:
-        records = self._read()
-        if records.pop(provider.id, None) is not None:
+        self._update(provider.id, None)
+
+    def _update(self, provider_id: str, value: dict[str, Any] | None) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            records = self._read()
+            if value is None:
+                records.pop(provider_id, None)
+            else:
+                records[provider_id] = value
             self._write(records)
 
     def _read(self) -> dict[str, Any]:

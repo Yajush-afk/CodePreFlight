@@ -9,7 +9,58 @@ from codepreflight_engine.adapters.fake import FakeProviderAdapter
 from codepreflight_engine.config import load_config
 from codepreflight_engine.errors import CodePreflightError
 from codepreflight_engine.readiness import ProviderHealth
-from codepreflight_engine.scan import FullScanOrchestrator
+from codepreflight_engine.scan import FullScanOrchestrator, ScanExecutor, ScanPlanner
+
+
+def test_long_source_lines_are_excluded_with_manifest_reason(git_repository: Path) -> None:
+    (git_repository / "long.py").write_text("a" * 1000)
+    git(git_repository, "add", "long.py")
+    inventory = ScanPlanner()._inventory(git_repository, {}, 120)
+    assert "long.py" not in inventory["selected"]
+    assert any(
+        item["path"] == "long.py" and "batch budget" in item["reason"]
+        for item in inventory["files"]
+    )
+
+
+def test_executor_requires_explicit_approval(git_repository: Path) -> None:
+    with pytest.raises(CodePreflightError) as error:
+        ScanExecutor().execute(
+            git_repository, {}, "anything", approved=False, emit=lambda *args: None
+        )
+    assert error.value.code == "full_scan_confirmation_required"
+
+
+def test_dirty_after_preview_is_stale_and_checks_cannot_change_approved_content(
+    git_repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synchronized_repository(git_repository, tmp_path)
+    adapter = FakeProviderAdapter(json.dumps({"summary": "ok", "findings": []}))
+    install_adapter(monkeypatch, adapter, git_repository)
+    preview = FullScanOrchestrator().scan(
+        git_repository, {"action": "plan", "provider": "fake"}, lambda *args: None
+    )
+    payload = {
+        "provider": "fake",
+        "fullScanApproved": True,
+        "planFingerprint": preview["planFingerprint"],
+    }
+    dirty = git_repository / "dirty.py"
+    dirty.write_text("value = 1\n")
+    with pytest.raises(CodePreflightError) as error:
+        FullScanOrchestrator().scan(git_repository, payload, lambda *args: None)
+    assert error.value.code == "scan_plan_stale"
+    dirty.unlink()
+
+    def modifying_check(*args: object) -> list[object]:
+        dirty.write_text("value = 2\n")
+        return []
+
+    monkeypatch.setattr("codepreflight_engine.scan.CheckRunner.run", modifying_check)
+    with pytest.raises(CodePreflightError) as error:
+        FullScanOrchestrator().scan(git_repository, payload, lambda *args: None)
+    assert error.value.code == "scan_plan_stale"
+    assert adapter.requests == []
 
 
 def synchronized_repository(git_repository: Path, tmp_path: Path) -> Path:

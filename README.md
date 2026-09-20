@@ -67,9 +67,10 @@ preparation performs the deep review and drafts a title and description while di
 checks actually run from tests merely recommended.
 
 Each finding includes severity, confidence, evidence, verification state, impact, and a
-recommended action. Running `preflight` opens an ephemeral repository session with a persistent
-composer. Use `/tree`, `/branches`, `/commits`, `/review staged`, `/review commit <revision>`,
-`/review branch`, `/review pr`, `/mode`, `/scan full`, and `/help`; plain-language questions stay
+recommended action. Running `preflight` opens a fullscreen, ephemeral repository session with a
+persistent composer, guided setup, and a display-only local commit graph. Use `/files`,
+`/branches`, `/commits`, `/review`, `/reviewcommit <revision>`, `/reviewbranch`, `/reviewpr`,
+`/mode`, `/scanfull`, and `/help`; plain-language questions stay
 scoped to repository, Git, review, and history evidence. Arrow keys navigate focused lists and
 composer history. Reviews advise by default; only verified severities configured by the
 repository can block a managed hook. Operational provider failures are fail-open unless the
@@ -84,6 +85,11 @@ variables and CodePreFlight never stores the secret value. Use
 Use `/model` and `/variant` in the interactive session to select a provider model and reasoning
 effort. CodePreFlight exposes only the standard service tier and filters fast-tier model aliases.
 For routine reviews, the picker recommends a capable non-flagship model to reduce credit usage.
+
+Type `/` for fuzzy command suggestions and contextual arguments. Use `/activity` for sanitized
+command outcomes and `preflight --inline` for the non-fullscreen fallback.
+See the [workspace guide](docs/INTERACTIVE_SESSION.md), [scan approval guide](docs/FULL_SCAN.md),
+and [demo walkthrough](docs/DEMO.md).
 
 ## Reproducible seeded-defect demonstration
 

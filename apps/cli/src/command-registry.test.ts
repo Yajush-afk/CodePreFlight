@@ -34,4 +34,14 @@ describe("command guidance", () => {
     await coordinator.suggest("/reviewcommit ");
     expect(load).toHaveBeenCalledTimes(2);
   });
+  it("uses ephemeral recent usage only after match quality", async () => {
+    const coordinator = new SuggestionCoordinator(
+      new CommandRegistry(),
+      async () => [],
+    );
+    coordinator.record("/mode");
+    expect((await coordinator.suggest("/"))[0]!.value).toBe("mode");
+    expect((await coordinator.suggest("/mo"))[0]!.value).toBe("model");
+    expect((await coordinator.suggest("/model"))[0]!.value).toBe("model");
+  });
 });

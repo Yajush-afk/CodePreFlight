@@ -20,12 +20,55 @@ def completed(
     return subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr="")
 
 
+def test_api_readiness_uses_configured_environment_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(providers.shutil, "which", lambda executable: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "not-the-configured-key")
+    monkeypatch.delenv("CUSTOM_REVIEW_KEY", raising=False)
+    config = {"providers": {"openai-compatible": {"api_key_env": "CUSTOM_REVIEW_KEY"}}}
+    descriptor = providers.discover_providers(config)[-1]
+    assert descriptor.authentication == AuthenticationState.REQUIRED
+    monkeypatch.setenv("CUSTOM_REVIEW_KEY", "synthetic-test-key")
+    descriptor = providers.discover_providers(config)[-1]
+    assert descriptor.authentication == AuthenticationState.AUTHENTICATED
+    assert descriptor.detail == "uses CUSTOM_REVIEW_KEY"
+
+
+def test_remote_ollama_cannot_be_misreported_as_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        providers, "_run", lambda *args, **kwargs: pytest.fail("must not query remote")
+    )
+    result = providers._ollama_health({"base_url": "https://remote.invalid"})
+    assert result["availability"] == ProviderAvailability.UNAVAILABLE
+    assert "loopback" in result["detail"]
+
+
+def test_all_adapter_flags_are_checked() -> None:
+    from pathlib import Path
+
+    from codepreflight_engine.adapters.cli import (
+        ClaudeCliAdapter,
+        CodexCliAdapter,
+        OpenCodeCliAdapter,
+    )
+
+    commands = {
+        "codex": CodexCliAdapter.command(
+            Path("schema"), Path("output"), Path("work"), model="m", variant="high"
+        ),
+        "claude": ClaudeCliAdapter.command("m"),
+        "opencode": OpenCodeCliAdapter.command(Path("work"), model="m", variant="high"),
+    }
+    for name, command in commands.items():
+        flags = {part for part in command if part.startswith("-") and part != "-"}
+        assert flags <= set(providers.REQUIRED_FLAGS[name])
+
+
 def test_ollama_without_configured_model_is_degraded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(providers.shutil, "which", lambda executable: f"/bin/{executable}")
 
-    def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if command == ["ollama", "--version"]:
             return completed(command, "ollama version 1.0\n")
         if command == ["ollama", "list"]:
@@ -53,7 +96,7 @@ def test_ollama_without_configured_model_is_degraded(
 def test_ollama_with_configured_model_is_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(providers.shutil, "which", lambda executable: f"/bin/{executable}")
 
-    def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if command == ["ollama", "--version"]:
             return completed(command, "ollama version 1.0\n")
         if command == ["ollama", "list"]:
@@ -86,7 +129,7 @@ def test_opencode_without_any_credentials_requires_authentication(
         lambda executable: "/bin/opencode" if executable == "opencode" else None,
     )
 
-    def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if command == ["opencode", "--version"]:
             return completed(command, "1.0\n")
         if command == ["opencode", "run", "--help"]:
@@ -112,7 +155,7 @@ def test_authenticated_opencode_requires_explicit_standard_model(
         lambda executable: "/bin/opencode" if executable == "opencode" else None,
     )
 
-    def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if command == ["opencode", "--version"]:
             return completed(command, "1.0\n")
         if command == ["opencode", "run", "--help"]:

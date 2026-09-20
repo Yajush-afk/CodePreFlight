@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .activity import activity_scope
+from .activity import activity_scope, operation
 from .adapters import ProviderRegistry
 from .automation import AutomationManager
 from .cache import ReviewCache
@@ -448,8 +448,10 @@ def _handle_pr_prepare(request: EngineRequest, path: Path) -> None:
 
 
 def _handle_status(request: EngineRequest, path: Path) -> None:
-    snapshot = RepositoryInspector().inspect(path)
-    config = load_config(Path(snapshot.root))
+    with operation("Preflight", "repository inspection") as record:
+        snapshot = RepositoryInspector().inspect(path)
+        config = load_config(Path(snapshot.root))
+        record["summary"] = "Preflight checked repository status"
     complete(
         request.requestId,
         {

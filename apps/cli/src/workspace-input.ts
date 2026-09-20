@@ -80,20 +80,25 @@ function navigateWorkspace(
 }
 
 export function useWorkspaceInput(context: WorkspaceInput): void {
-  useInput(
-    (value, key) => {
-      if (key.ctrl && value === "c") {
-        context.controller.dispose();
-        context.exit();
-        return;
-      }
-      if (suggestionKey(context, key)) return;
-      if (key.escape) {
-        escapeWorkspace(context);
-        return;
-      }
-      navigateWorkspace(context, value, key);
-    },
-    { isActive: !context.terminalHandoff },
-  );
+  useInput((value, key) => handleWorkspaceKey(context, value, key), {
+    isActive: !context.terminalHandoff,
+  });
+}
+
+export function handleWorkspaceKey(
+  context: WorkspaceInput,
+  value: string,
+  key: Key,
+): void {
+  if (key.ctrl && value === "c") {
+    context.controller.dispose();
+    context.exit();
+    return;
+  }
+  if (suggestionKey(context, key)) return;
+  if (key.escape) {
+    escapeWorkspace(context);
+    return;
+  }
+  navigateWorkspace(context, value, key);
 }

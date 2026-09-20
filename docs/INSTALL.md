@@ -41,8 +41,9 @@ send repository evidence remotely.
 ## Upgrade and uninstall
 
 Pull the desired revision, rerun `make install`, and rebuild. Before uninstalling, remove
-managed hooks from each repository with `preflight hooks remove pre-commit --write` and
-`preflight hooks remove pre-push --write`. Then run:
+managed hooks from each repository with `preflight hooks remove pre-commit --write`,
+`preflight hooks remove post-commit --write`, and `preflight hooks remove pre-push --write`.
+Then run:
 
 ```bash
 npm unlink --global @codepreflight/cli

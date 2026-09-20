@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from codepreflight_engine.activity import activity_scope, operation, sanitized_command
@@ -32,3 +34,15 @@ def test_skipped_operation_event():
     ):
         record["outcome"] = "skipped"
     assert events[-1][0] == "operation_skipped"
+
+
+def test_timeout_classification_and_commit_content_redaction():
+    events = []
+    with (
+        activity_scope(lambda event, payload: events.append((event, payload))),
+        pytest.raises(subprocess.TimeoutExpired),
+        operation("Provider", "review"),
+    ):
+        raise subprocess.TimeoutExpired(["tool"], 1)
+    assert events[-1][1]["status"] == "timed_out"
+    assert "private message" not in sanitized_command(["git", "commit", "-m", "private message"])

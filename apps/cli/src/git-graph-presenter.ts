@@ -10,6 +10,10 @@ export interface GitGraph {
   mergeBase?: string;
   head?: string;
   current: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  conflicts?: number;
   base?: string;
   fingerprint: string;
   note?: string;

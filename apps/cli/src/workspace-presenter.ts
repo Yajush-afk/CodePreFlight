@@ -5,6 +5,46 @@ import type {
 } from "./session-controller.js";
 
 export class WorkspacePresenter {
+  scanApproval(manifest: Record<string, unknown>): string {
+    const files = (manifest.files ?? []) as Array<Record<string, unknown>>;
+    return [
+      `${String(manifest.eligibleFiles)} eligible files · ${String(manifest.excludedFiles)} excluded · ${String(manifest.redactions)} redactions`,
+      `${Number(manifest.totalSelectedCharacters ?? 0).toLocaleString()} selected characters · approximately ${String(manifest.providerRequests)} provider requests (repair may add requests)`,
+      `Reviewer: ${String(manifest.provider)} · ${String(manifest.model)} · ${String(manifest.variant ?? "default")}`,
+      `Destination: ${String(manifest.destination)} (${String(manifest.privacyCategory)})`,
+      `Planned checks: ${JSON.stringify(manifest.plannedChecks)}`,
+      `Cache available: ${manifest.cacheHit ? "yes" : "no"}`,
+      `Repository: ${String(manifest.repositoryHead)} · plan ${String(manifest.planFingerprint)}`,
+      "This approval is only for this exact full scan.",
+      "Sources (PgUp/PgDn to inspect):",
+      ...files.map(
+        (file) =>
+          `${String(file.status)} · ${String(file.path)} · ${String(file.reason)}`,
+      ),
+    ].join("\n");
+  }
+  viewport(
+    text: string,
+    width: number,
+    height: number,
+    offset: number,
+  ): string {
+    const lines = text.split("\n").flatMap((line) => {
+      const characters = Array.from(line);
+      const rows: string[] = [];
+      for (
+        let index = 0;
+        index < characters.length;
+        index += Math.max(10, width)
+      )
+        rows.push(
+          characters.slice(index, index + Math.max(10, width)).join(""),
+        );
+      return rows.length ? rows : [""];
+    });
+    const start = Math.min(offset, Math.max(0, lines.length - height));
+    return lines.slice(start, start + height).join("\n");
+  }
   navigationItems(
     action: "tree" | "branches" | "commits",
     items: Array<Record<string, unknown>>,

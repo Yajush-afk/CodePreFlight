@@ -1,9 +1,46 @@
 import React from "react";
 import { render } from "ink-testing-library";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SessionView } from "./tui.js";
 
 describe("SessionView", () => {
+  it("renders distinct picker items without duplicate React keys", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = render(
+      <SessionView
+        state={{
+          started: true,
+          busy: false,
+          shouldExit: false,
+          transcript: [],
+          overlay: {
+            kind: "providers",
+            title: "Setup",
+            items: [
+              {
+                value: "choose",
+                label: "Choose provider",
+                action: { kind: "setup", value: "providers" },
+              },
+              {
+                value: "local",
+                label: "Continue without AI",
+                action: { kind: "setup", value: "local" },
+              },
+            ],
+          },
+        }}
+        input=""
+        onInput={() => {}}
+        onSubmit={() => {}}
+      />,
+    );
+    expect(view.lastFrame()).toContain("Choose provider");
+    expect(view.lastFrame()).toContain("Continue without AI");
+    expect(errors.mock.calls.flat().join(" ")).not.toContain("same key");
+    view.unmount();
+    errors.mockRestore();
+  });
   it("clears the Ink frame while a provider owns the terminal", () => {
     const view = render(
       <SessionView
