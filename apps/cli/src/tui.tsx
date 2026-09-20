@@ -12,6 +12,8 @@ import type { Suggestion } from "./command-registry.js";
 import { TerminalSession, interactiveEffects } from "./terminal-session.js";
 import { WorkspacePresenter } from "./workspace-presenter.js";
 import { WorkingIndicator } from "./working-indicator.js";
+import { GitGraphView } from "./git-graph-view.js";
+import { GitGraphPresenter } from "./git-graph-presenter.js";
 
 interface AppProps {
   repositoryPath: string;
@@ -71,9 +73,14 @@ export function SessionView({
     !state.pendingDecision &&
     (suggestions.length > 0 || suggestionsLoading);
   const bodyHeight = Math.max(4, terminalHeight - (menuOpen ? 18 : 11));
+  const showGraph =
+    terminalWidth >= 100 &&
+    Boolean(state.graph) &&
+    !state.overlay &&
+    !state.pendingDecision;
   const lines = presenter.transcript(
     state.transcript,
-    Math.max(10, terminalWidth - 4),
+    Math.max(10, terminalWidth - (showGraph ? 42 : 4)),
     bodyHeight,
     scrollOffset,
   );
@@ -102,81 +109,107 @@ export function SessionView({
           {header.conflicts ? ` · ${header.conflicts} conflicts` : ""}
         </Text>
       )}
+      {terminalWidth < 100 && state.graph && (
+        <Text dimColor wrap="truncate-end">
+          {new GitGraphPresenter().summary(state.graph)}
+        </Text>
+      )}
       <Box
-        flexDirection="column"
+        flexDirection="row"
         flexGrow={1}
         height={bodyHeight}
         overflowY="hidden"
-        marginTop={1}
       >
-        {state.pendingDecision ? (
-          <>
-            <Text bold color={colorEnabled ? "yellow" : undefined}>
-              {state.pendingDecision.title}
-            </Text>
-            <Text>
-              {state.pendingDecision.body
-                .split("\n")
-                .slice(scrollOffset, scrollOffset + Math.max(1, bodyHeight - 3))
-                .join("\n")}
-            </Text>
-            <Text color={colorEnabled ? "yellow" : undefined}>
-              y {state.pendingDecision.confirmLabel} · n cancel · PgUp/PgDn
-              inspect
-            </Text>
-          </>
-        ) : overlay ? (
-          <>
-            <Text bold color={accent}>
-              {overlay.title}
-            </Text>
-            {overlay.body && (
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          height={bodyHeight}
+          overflowY="hidden"
+          marginTop={1}
+          width={showGraph ? terminalWidth - 40 : terminalWidth - 2}
+        >
+          {state.pendingDecision ? (
+            <>
+              <Text bold color={colorEnabled ? "yellow" : undefined}>
+                {state.pendingDecision.title}
+              </Text>
               <Text>
-                {overlay.body
+                {state.pendingDecision.body
                   .split("\n")
                   .slice(
                     scrollOffset,
-                    scrollOffset +
-                      Math.max(2, bodyHeight - (overlay.items?.length ? 8 : 2)),
+                    scrollOffset + Math.max(1, bodyHeight - 3),
                   )
                   .join("\n")}
               </Text>
-            )}
-            {overlay.items?.length ? (
-              <SelectInput
-                items={overlay.items.map((item) => ({
-                  label: item.label,
-                  value: item,
-                }))}
-                onSelect={({ value }) =>
-                  value.action
-                    ? onSelect?.(value.action)
-                    : onSubmit(value.command ?? "")
-                }
-                limit={Math.max(2, Math.min(8, bodyHeight - 4))}
-              />
-            ) : null}
-            <Text dimColor>Esc back · PgUp/PgDn inspect</Text>
-          </>
-        ) : (
-          lines.map((line, index) => {
-            const severity = Object.keys(SEVERITY_COLORS).find((value) =>
-              line.includes(value),
-            );
-            return (
-              <Text
-                key={index}
-                wrap="truncate-end"
-                color={
-                  colorEnabled && severity
-                    ? SEVERITY_COLORS[severity]
-                    : undefined
-                }
-              >
-                {line || " "}
+              <Text color={colorEnabled ? "yellow" : undefined}>
+                y {state.pendingDecision.confirmLabel} · n cancel · PgUp/PgDn
+                inspect
               </Text>
-            );
-          })
+            </>
+          ) : overlay ? (
+            <>
+              <Text bold color={accent}>
+                {overlay.title}
+              </Text>
+              {overlay.body && (
+                <Text>
+                  {overlay.body
+                    .split("\n")
+                    .slice(
+                      scrollOffset,
+                      scrollOffset +
+                        Math.max(
+                          2,
+                          bodyHeight - (overlay.items?.length ? 8 : 2),
+                        ),
+                    )
+                    .join("\n")}
+                </Text>
+              )}
+              {overlay.items?.length ? (
+                <SelectInput
+                  items={overlay.items.map((item) => ({
+                    label: item.label,
+                    value: item,
+                  }))}
+                  onSelect={({ value }) =>
+                    value.action
+                      ? onSelect?.(value.action)
+                      : onSubmit(value.command ?? "")
+                  }
+                  limit={Math.max(2, Math.min(8, bodyHeight - 4))}
+                />
+              ) : null}
+              <Text dimColor>Esc back · PgUp/PgDn inspect</Text>
+            </>
+          ) : (
+            lines.map((line, index) => {
+              const severity = Object.keys(SEVERITY_COLORS).find((value) =>
+                line.includes(value),
+              );
+              return (
+                <Text
+                  key={index}
+                  wrap="truncate-end"
+                  color={
+                    colorEnabled && severity
+                      ? SEVERITY_COLORS[severity]
+                      : undefined
+                  }
+                >
+                  {line || " "}
+                </Text>
+              );
+            })
+          )}
+        </Box>
+        {showGraph && state.graph && (
+          <GitGraphView
+            graph={state.graph}
+            height={bodyHeight}
+            colorEnabled={colorEnabled}
+          />
         )}
       </Box>
       {state.pipeline && (

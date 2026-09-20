@@ -10,6 +10,7 @@ import { CommandRegistry, type Suggestion } from "./command-registry.js";
 import { SuggestionCoordinator } from "./suggestion-coordinator.js";
 import { OnboardingCoordinator } from "./onboarding-coordinator.js";
 import { WorkflowCoordinator } from "./workflow-coordinator.js";
+import { GitGraphPresenter, type GitGraph } from "./git-graph-presenter.js";
 
 export interface SessionEngine {
   request(
@@ -97,6 +98,7 @@ export interface SessionState {
   activeActor?: string;
   interruptionNotice?: string;
   header?: SessionHeader;
+  graph?: GitGraph;
   transcript: TranscriptEntry[];
   pendingDecision?: PendingDecision;
   overlay?: SessionOverlay;
@@ -402,6 +404,7 @@ export class SessionController {
           this.appendStatus();
         }),
       files: () => this.openWorkspace("tree"),
+      graph: () => this.openGraph(),
       branches: () => this.openWorkspace("branches"),
       commits: () => this.openWorkspace("commits"),
       file: () => this.previewFile(argument),
@@ -727,6 +730,63 @@ export class SessionController {
         reviewMode: this.automation.mode ?? "manual",
       },
     });
+    await this.refreshGraph();
+  }
+
+  private async refreshGraph(announce = false): Promise<void> {
+    try {
+      const graph = (await this.engine.request(
+        "workspace",
+        this.options.repositoryPath,
+        { action: "graph" },
+      )) as unknown as GitGraph;
+      if (!Array.isArray(graph.lanes)) return;
+      const previous = this.currentState.graph;
+      if (previous?.fingerprint === graph.fingerprint) return;
+      this.suggestions.invalidate();
+      if (previous && announce) {
+        this.lastReview = undefined;
+        this.fullScanManifest = undefined;
+        this.append({
+          kind: "system",
+          body: `Git changed: ${graph.current} at ${graph.head?.slice(0, 7) ?? "unborn HEAD"}. Review context refreshed.`,
+        });
+      }
+      const header = this.currentState.header;
+      this.patch({
+        graph,
+        header: header
+          ? {
+              ...header,
+              branch: graph.current,
+              staged: graph.workingTree.staged,
+              unstaged: graph.workingTree.unstaged,
+              untracked: graph.workingTree.untracked,
+            }
+          : header,
+      });
+    } catch {
+      this.patch({ graph: undefined });
+    }
+  }
+
+  private async openGraph(): Promise<void> {
+    await this.runBusy("Reading local commit graph…", async () => {
+      await this.refreshGraph();
+      const graph = this.currentState.graph;
+      this.patch({
+        overlay: {
+          kind: "preview",
+          title: "Local commit graph",
+          body: graph
+            ? new GitGraphPresenter()
+                .lines(graph)
+                .map((line) => line.text)
+                .join("\n")
+            : "Graph unavailable. Use /status to inspect repository state.",
+        },
+      });
+    });
   }
 
   private openModes(): void {
@@ -928,7 +988,8 @@ export class SessionController {
   }
 
   private async pollAutomationJobs(): Promise<void> {
-    if (this.active || this.currentState.shouldExit) return;
+    if (this.active || this.currentState.busy || this.currentState.shouldExit)
+      return;
     try {
       this.automation = (await this.engine.request(
         "automation",
@@ -936,6 +997,7 @@ export class SessionController {
         { action: "status" },
       )) as AutomationView;
       this.appendAutomationUpdates();
+      if (!this.currentState.busy) await this.refreshGraph(true);
     } catch {
       // Polling remains quiet; explicit /jobs surfaces actionable failures.
     }

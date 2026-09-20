@@ -36,7 +36,8 @@ export class WorkspacePresenter {
     return wrapped.slice(Math.max(0, end - height), end);
   }
   recommendation(header?: SessionHeader): string {
-    if (!header) return "Open Preflight inside a Git repository; /status retries inspection.";
+    if (!header)
+      return "Open Preflight inside a Git repository; /status retries inspection.";
     if (header.providerAvailability !== "ready")
       return "Set up your reviewer with /provider; local Git features remain available.";
     if (header.conflicts) return "Resolve Git conflicts before reviewing.";

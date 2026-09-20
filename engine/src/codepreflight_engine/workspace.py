@@ -9,6 +9,7 @@ from typing import Any
 from .automation import AutomationManager
 from .errors import CodePreflightError
 from .git import GitRunner
+from .git_graph import GitGraphBuilder
 from .repository import RepositoryInspector
 
 MAX_TREE_ITEMS = 5_000
@@ -24,6 +25,8 @@ class RepositoryWorkspace:
         action = str(payload.get("action", "overview"))
         if action == "overview":
             return {"repository": snapshot.model_dump(mode="json")}
+        if action == "graph":
+            return GitGraphBuilder().build(root, snapshot)
         if action == "tree":
             return self._tree(root, snapshot)
         if action == "branches":
