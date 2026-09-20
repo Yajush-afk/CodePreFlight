@@ -9,7 +9,7 @@ import pathspec
 from .checks import CheckRunner
 from .errors import CodePreflightError
 from .git import GitRunner
-from .models import CheckDefinition, ContextEntry, ContextManifest, ContextPackage
+from .models import CheckDefinition, CheckResult, ContextEntry, ContextManifest, ContextPackage
 from .secrets import redact_secrets, verify_with_external_scanner
 
 BINARY_SUFFIXES = {
@@ -42,6 +42,8 @@ MAX_RELATED_FILES = 12
 
 
 class ContextBuilder:
+    """Runs approved deterministic checks and supplies their evidence to the planner."""
+
     def build(
         self,
         root: Path,
@@ -52,15 +54,54 @@ class ContextBuilder:
         revision: str | None = None,
         comparison_note: str | None = None,
     ) -> ContextPackage:
-        git = GitRunner(root)
+        ContextPlanner().changed_paths(GitRunner(root), target, base_revision, revision)
+        definitions = [CheckDefinition.model_validate(item) for item in config.get("checks", [])]
+        checks = CheckRunner().run(root, definitions)
+        return ContextPlanner().plan(
+            root,
+            config,
+            target=target,
+            base_revision=base_revision,
+            revision=revision,
+            comparison_note=comparison_note,
+            checks=checks,
+        )
+
+
+class ContextPlanner:
+    """Deterministic context selection from reviewed Git objects and supplied check evidence."""
+
+    def changed_paths(
+        self,
+        git: GitRunner,
+        target: Literal["staged", "commit", "branch", "pull_request"],
+        base_revision: str | None,
+        revision: str | None,
+    ) -> list[str]:
         diff_args = self._diff_args(target, base_revision, revision)
-        changed_files = [
+        paths = [
             path for path in git.run(*diff_args, "--name-only", "-z").stdout.split("\0") if path
         ]
-        if not changed_files:
+        if not paths:
             raise CodePreflightError(
                 "empty_change_set", f"There are no {target.replace('_', ' ')} changes to review"
             )
+        return paths
+
+    def plan(
+        self,
+        root: Path,
+        config: dict[str, Any],
+        *,
+        target: Literal["staged", "commit", "branch", "pull_request"] = "staged",
+        base_revision: str | None = None,
+        revision: str | None = None,
+        comparison_note: str | None = None,
+        checks: list[CheckResult] | None = None,
+    ) -> ContextPackage:
+        git = GitRunner(root)
+        diff_args = self._diff_args(target, base_revision, revision)
+        changed_files = self.changed_paths(git, target, base_revision, revision)
 
         limit = int(config.get("review", {}).get("context_limit", 60000))
         configured_ignore = config.get("ignore", [])
@@ -69,35 +110,13 @@ class ContextBuilder:
             *(configured_ignore if isinstance(configured_ignore, list) else []),
         ]
         matcher = pathspec.GitIgnoreSpec.from_lines(ignore)
-        definitions = [CheckDefinition.model_validate(item) for item in config.get("checks", [])]
-        checks = CheckRunner().run(root, definitions)
+        checks = checks or []
         entries: list[ContextEntry] = []
         sections: list[str] = []
 
-        selected: dict[str, str] = {}
-        review_files: list[str] = []
-        for relative in changed_files:
-            exclusion = self._exclusion(git, target, relative, matcher, revision)
-            if exclusion:
-                entries.append(ContextEntry(path=relative, reason=exclusion, status="excluded"))
-                continue
-            review_files.append(relative)
-            content = self._selected_content(git, target, relative, revision)
-            if content is None:
-                entries.append(
-                    ContextEntry(
-                        path=relative,
-                        reason="deleted file represented by selected diff",
-                        status="included",
-                    )
-                )
-                continue
-            if "\x00" in content:
-                entries.append(
-                    ContextEntry(path=relative, reason="binary content", status="excluded")
-                )
-                continue
-            selected[relative] = content
+        selected, review_files = self._select_changed(
+            git, target, changed_files, matcher, revision, entries
+        )
 
         diff = (
             git.run(*diff_args, "--no-ext-diff", "--unified=5", "--", *review_files).stdout
@@ -198,7 +217,27 @@ class ContextBuilder:
                 )
             )
 
-        content = "\n\n".join(sections)
+        final_content, redactions, scanner = self._redact("\n\n".join(sections), limit, entries)
+        return ContextPackage(
+            content=final_content,
+            manifest=ContextManifest(
+                entries=entries,
+                total_characters=len(final_content),
+                limit_characters=limit,
+                redactions=redactions,
+                secret_scanner=scanner,
+            ),
+            changed_files=changed_files,
+            checks=checks,
+            target=target,
+            base_revision=base_revision,
+            revision=revision,
+            comparison_note=comparison_note,
+        )
+
+    def _redact(
+        self, content: str, limit: int, entries: list[ContextEntry]
+    ) -> tuple[str, int, str]:
         redacted = redact_secrets(content)
         if not redacted.safe:
             raise CodePreflightError(
@@ -229,22 +268,42 @@ class ContextBuilder:
                     status="truncated",
                 )
             )
-        return ContextPackage(
-            content=final_content,
-            manifest=ContextManifest(
-                entries=entries,
-                total_characters=len(final_content),
-                limit_characters=limit,
-                redactions=redacted.count,
-                secret_scanner=scanner,
-            ),
-            changed_files=changed_files,
-            checks=checks,
-            target=target,
-            base_revision=base_revision,
-            revision=revision,
-            comparison_note=comparison_note,
-        )
+        return final_content, redacted.count, scanner
+
+    def _select_changed(
+        self,
+        git: GitRunner,
+        target: Literal["staged", "commit", "branch", "pull_request"],
+        changed_files: list[str],
+        matcher: pathspec.GitIgnoreSpec,
+        revision: str | None,
+        entries: list[ContextEntry],
+    ) -> tuple[dict[str, str], list[str]]:
+        selected: dict[str, str] = {}
+        review_files: list[str] = []
+        for relative in changed_files:
+            exclusion = self._exclusion(git, target, relative, matcher, revision)
+            if exclusion:
+                entries.append(ContextEntry(path=relative, reason=exclusion, status="excluded"))
+                continue
+            review_files.append(relative)
+            content = self._selected_content(git, target, relative, revision)
+            if content is None:
+                entries.append(
+                    ContextEntry(
+                        path=relative,
+                        reason="deleted file represented by selected diff",
+                        status="included",
+                    )
+                )
+                continue
+            if "\x00" in content:
+                entries.append(
+                    ContextEntry(path=relative, reason="binary content", status="excluded")
+                )
+                continue
+            selected[relative] = content
+        return selected, review_files
 
     def _exclusion(
         self,

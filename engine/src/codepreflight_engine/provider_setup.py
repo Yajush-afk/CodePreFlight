@@ -53,6 +53,41 @@ def configure_provider(
             "invalid_config", f"Cannot read configuration at {path}: {error}"
         ) from error
 
+    _update_provider_config(config, provider_id, model, variant)
+
+    if scope == "personal":
+        PersonalConfig.model_validate(config)
+    else:
+        CodePreflightConfig.model_validate(config)
+    rendered = tomli_w.dumps(config)
+    diff = "".join(
+        unified_diff(
+            current.splitlines(keepends=True),
+            rendered.splitlines(keepends=True),
+            fromfile=str(path) if current else "/dev/null",
+            tofile=str(path),
+        )
+    )
+    if write:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.codepreflight")
+        temporary.write_text(rendered, encoding="utf-8")
+        temporary.replace(path)
+    return {
+        "provider": provider_id,
+        "model": model,
+        "variant": variant,
+        "scope": scope,
+        "path": str(path),
+        "written": write,
+        "preview": rendered,
+        "diff": diff,
+    }
+
+
+def _update_provider_config(
+    config: dict[str, Any], provider_id: str, model: str | None, variant: str | None
+) -> None:
     review = config.setdefault("review", {})
     if not isinstance(review, dict):
         raise CodePreflightError("invalid_config", "The review configuration must be a table")
@@ -89,35 +124,6 @@ def configure_provider(
                 "invalid_config", f"Provider configuration for {provider_id} must be a table"
             )
         selected["variant"] = variant
-
-    if scope == "personal":
-        PersonalConfig.model_validate(config)
-    else:
-        CodePreflightConfig.model_validate(config)
-    rendered = tomli_w.dumps(config)
-    diff = "".join(
-        unified_diff(
-            current.splitlines(keepends=True),
-            rendered.splitlines(keepends=True),
-            fromfile=str(path) if current else "/dev/null",
-            tofile=str(path),
-        )
-    )
-    if write:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.codepreflight")
-        temporary.write_text(rendered, encoding="utf-8")
-        temporary.replace(path)
-    return {
-        "provider": provider_id,
-        "model": model,
-        "variant": variant,
-        "scope": scope,
-        "path": str(path),
-        "written": write,
-        "preview": rendered,
-        "diff": diff,
-    }
 
 
 def provider_models(provider_id: str) -> dict[str, object]:

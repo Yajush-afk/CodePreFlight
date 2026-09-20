@@ -42,84 +42,88 @@ class FindingVerifier:
         base_revision: str | None,
         revision: str | None,
     ) -> Finding:
-        changed_lines = self._changed_lines(root, target, base_revision, revision)
-        checks = 0
-        successes = 0
+        changed = self._changed_lines(root, target, base_revision, revision)
+        evidence: list[EvidenceLocation] = []
         notes: list[str] = []
-        valid_locations = 0
-        normalized_evidence: list[EvidenceLocation] = []
-        git = GitRunner(root)
-        for evidence in draft.evidence:
-            checks += 1
-            normalized_path = self._normalize_path(root, evidence.path)
-            candidate = (root / normalized_path).resolve()
-            try:
-                candidate.relative_to(root.resolve())
-            except ValueError:
-                notes.append(f"Evidence path escapes the repository: {evidence.path}")
-                continue
-            content = self._selected_content(git, target, normalized_path, revision)
-            if content is None:
-                notes.append(f"Evidence file does not exist in reviewed state: {evidence.path}")
-                continue
-            lines = content.splitlines()
-            if (
-                evidence.end_line < evidence.start_line
-                or evidence.start_line > len(lines)
-                or evidence.end_line > len(lines)
-            ):
-                notes.append(f"Evidence lines are outside {normalized_path}")
-                continue
-            normalized_evidence.append(evidence.model_copy(update={"path": normalized_path}))
-            valid_locations += 1
-            successes += 1
-            checks += 1
-            staged_lines = changed_lines.get(normalized_path, set())
-            if target == "full" or any(
-                line in staged_lines for line in range(evidence.start_line, evidence.end_line + 1)
-            ):
-                successes += 1
-            else:
-                notes.append(f"Evidence is outside changed lines in {normalized_path}")
-            if evidence.symbol:
-                checks += 1
-                if re.search(rf"\b{re.escape(evidence.symbol)}\b", "\n".join(lines)):
-                    successes += 1
-                else:
-                    notes.append(
-                        f"Referenced symbol '{evidence.symbol}' was not found in {normalized_path}"
-                    )
-
-        for suggestion in draft.suggested_tests:
-            path = self._suggested_test_path(suggestion)
-            if path is None:
-                continue
-            checks += 1
-            if (root / path).is_file():
-                successes += 1
-            else:
-                notes.append(f"Suggested test file does not exist: {path}")
-
-        if valid_locations == 0:
-            state = VerificationState.REJECTED
-        elif successes == checks:
-            state = VerificationState.VERIFIED
-        elif successes > 0:
-            state = VerificationState.PARTIALLY_VERIFIED
-        else:
-            state = VerificationState.UNVERIFIED
+        checks = successes = 0
+        for location in draft.evidence:
+            normalized, passed, total, reasons = self._location_rule(
+                root, location, target, revision, changed
+            )
+            checks += total
+            successes += passed
+            notes.extend(reasons)
+            if normalized:
+                evidence.append(normalized)
+        passed, total, reasons = self._test_rule(root, draft.suggested_tests)
+        checks += total
+        successes += passed
+        notes.extend(reasons)
+        state = self._verification_state(len(evidence), successes, checks)
         values = draft.model_dump()
-        values["evidence"] = normalized_evidence or draft.evidence
-        primary = (normalized_evidence or draft.evidence)[0]
+        values["evidence"] = evidence or draft.evidence
+        primary = (evidence or draft.evidence)[0]
         identity = hashlib.sha256(
             f"{draft.category}|{draft.title}|{primary.path}|{primary.start_line}".encode()
         ).hexdigest()[:12]
-        return Finding(
-            **values,
-            id=identity,
-            verification=state,
-            verification_notes=notes,
-        )
+        return Finding(**values, id=identity, verification=state, verification_notes=notes)
+
+    def _location_rule(
+        self,
+        root: Path,
+        evidence: EvidenceLocation,
+        target: str,
+        revision: str | None,
+        changed: dict[str, set[int]],
+    ) -> tuple[EvidenceLocation | None, int, int, list[str]]:
+        normalized = self._normalize_path(root, evidence.path)
+        try:
+            (root / normalized).resolve().relative_to(root.resolve())
+        except ValueError:
+            return None, 0, 1, [f"Evidence path escapes the repository: {evidence.path}"]
+        content = self._selected_content(GitRunner(root), target, normalized, revision)
+        if content is None:
+            return None, 0, 1, [f"Evidence file does not exist in reviewed state: {evidence.path}"]
+        lines = content.splitlines()
+        if not 1 <= evidence.start_line <= evidence.end_line <= len(lines):
+            return None, 0, 1, [f"Evidence lines are outside {normalized}"]
+        passed, total, notes = 1, 2, []
+        if target == "full" or any(
+            line in changed.get(normalized, set())
+            for line in range(evidence.start_line, evidence.end_line + 1)
+        ):
+            passed += 1
+        else:
+            notes.append(f"Evidence is outside changed lines in {normalized}")
+        if evidence.symbol:
+            total += 1
+            if re.search(rf"\b{re.escape(evidence.symbol)}\b", content):
+                passed += 1
+            else:
+                notes.append(f"Referenced symbol '{evidence.symbol}' was not found in {normalized}")
+        return evidence.model_copy(update={"path": normalized}), passed, total, notes
+
+    def _test_rule(self, root: Path, suggestions: list[str]) -> tuple[int, int, list[str]]:
+        passed = total = 0
+        notes: list[str] = []
+        for suggestion in suggestions:
+            path = self._suggested_test_path(suggestion)
+            if path is None:
+                continue
+            total += 1
+            candidate = (root / path).resolve()
+            if candidate.is_relative_to(root.resolve()) and candidate.is_file():
+                passed += 1
+            else:
+                notes.append(f"Suggested test file does not exist: {path}")
+        return passed, total, notes
+
+    def _verification_state(self, locations: int, successes: int, checks: int) -> VerificationState:
+        if locations == 0:
+            return VerificationState.REJECTED
+        if successes == checks:
+            return VerificationState.VERIFIED
+        return VerificationState.PARTIALLY_VERIFIED if successes else VerificationState.UNVERIFIED
 
     def _selected_content(
         self, git: GitRunner, target: str, path: str, revision: str | None

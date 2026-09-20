@@ -43,19 +43,8 @@ export class OnboardingCoordinator {
         action: "providers",
         label: "Choose another provider",
       };
-    if (["required", "unknown"].includes(provider.authentication ?? ""))
-      return {
-        title: "Sign in to your provider",
-        body:
-          provider.id === "openai-compatible"
-            ? "Set the configured API-key environment variable in your shell and restart Preflight. Never paste credentials into this session."
-            : "Provider-owned login may affect the account shared with other applications. Preflight never logs you out.",
-        action: provider.id === "openai-compatible" ? "providers" : "login",
-        label:
-          provider.id === "openai-compatible"
-            ? "Choose another provider"
-            : "Open official login",
-      };
+    const authentication = this.authenticationStep(provider);
+    if (authentication) return authentication;
     if (["missing", "selection_required"].includes(provider.model ?? ""))
       return {
         title: "Choose an available model",
@@ -63,6 +52,12 @@ export class OnboardingCoordinator {
         action: "model",
         label: "Choose model",
       };
+    const runtime = this.runtimeStep(provider);
+    if (runtime) return runtime;
+    return this.optionalSteps(provider, trusted);
+  }
+
+  private runtimeStep(provider: SetupProvider): SetupStep | undefined {
     if (
       provider.readiness?.state === "unavailable" ||
       provider.invocation === "incompatible"
@@ -83,6 +78,30 @@ export class OnboardingCoordinator {
         action: "providers",
         label: "Inspect providers",
       };
+    return undefined;
+  }
+
+  private authenticationStep(provider: SetupProvider): SetupStep | undefined {
+    if (["required", "unknown"].includes(provider.authentication ?? ""))
+      return {
+        title: "Sign in to your provider",
+        body:
+          provider.id === "openai-compatible"
+            ? "Set the configured API-key environment variable in your shell and restart Preflight. Never paste credentials into this session."
+            : "Provider-owned login may affect the account shared with other applications. Preflight never logs you out.",
+        action: provider.id === "openai-compatible" ? "providers" : "login",
+        label:
+          provider.id === "openai-compatible"
+            ? "Choose another provider"
+            : "Open official login",
+      };
+    return undefined;
+  }
+
+  private optionalSteps(
+    provider: SetupProvider,
+    trusted: boolean,
+  ): SetupStep | undefined {
     if (
       !provider.variant_name &&
       !this.skipped.has(`${provider.id}:${provider.model_name}:variant`)

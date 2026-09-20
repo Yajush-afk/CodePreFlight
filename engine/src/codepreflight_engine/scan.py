@@ -28,238 +28,8 @@ DEFAULT_BATCH_CHARACTERS = 40_000
 DEFAULT_MAX_FILE_BYTES = 500_000
 
 
-class FullScanOrchestrator:
-    """Hierarchical, resumable review of a clean synchronized base branch."""
-
-    def scan(
-        self,
-        path: Path,
-        payload: dict[str, Any],
-        emit: Any,
-    ) -> dict[str, Any]:
-        plan = self.plan(path, payload)
-        manifest = plan["manifest"]
-        if payload.get("action") == "plan":
-            return {"manifest": manifest, "planFingerprint": plan["fingerprint"]}
-        emit(
-            "consent_required",
-            {
-                "fullScan": True,
-                "provider": plan["provider"].model_dump(mode="json"),
-                "manifest": manifest,
-            },
-        )
-        if not payload.get("fullScanApproved"):
-            raise CodePreflightError(
-                "full_scan_confirmation_required",
-                "Review and approve this exact scan preview",
-                recoverable=True,
-                details={
-                    "planFingerprint": plan["fingerprint"],
-                    "actions": [{"type": "approve_transmission", "scope": "full_scan"}],
-                },
-            )
-        if payload.get("planFingerprint") != plan["fingerprint"]:
-            raise CodePreflightError(
-                "scan_plan_stale",
-                "Scan preview changed or is missing; preview and approve again",
-                recoverable=True,
-            )
-        try:
-            result = self._execute(plan, emit)
-        except CodePreflightError as error:
-            if error.code.startswith("provider_"):
-                ProviderHealth(plan["root"]).invalidate(plan["provider"])
-            raise
-        ProviderHealth(plan["root"]).record(plan["provider"], plan["config"])
-        return result
-
-    def plan(self, path: Path, payload: dict[str, Any]) -> dict[str, Any]:
-        """Read-only preview: never runs configured checks or review requests."""
-        snapshot = RepositoryInspector().inspect(path)
-        root = Path(snapshot.root)
-        config = load_config(root)
-        provider_id = str(
-            payload.get("provider") or config.get("review", {}).get("provider", "ollama")
-        )
-        adapter = ProviderRegistry(config).adapter(provider_id)
-        provider = adapter.descriptor
-        readiness = review_readiness(
-            provider,
-            verified=ProviderHealth(root).verified(provider, config),
-            require_verified=True,
-        )
-        blockers = [*readiness["blockers"], *self._guard_blockers(root, snapshot)]
-        if (
-            config.get("checks") or provider.kind == ProviderKind.SUBSCRIPTION_CLI
-        ) and not is_trusted(root):
-            blockers.append(
-                {
-                    "code": "repository_not_trusted",
-                    "message": "Approve repository trust",
-                    "action": {"type": "trust_repository"},
-                }
-            )
-        if blockers:
-            raise CodePreflightError(
-                "scan_blocked",
-                "; ".join(item["message"] for item in blockers),
-                recoverable=True,
-                details={
-                    "blockers": blockers,
-                    "actions": [item.get("action", {"type": "retry"}) for item in blockers],
-                },
-            )
-
-        inventory = self._inventory(root, config)
-        planned_checks = [CheckDefinition.model_validate(item) for item in config.get("checks", [])]
-        repository_map = self._repository_map(snapshot, inventory)
-        batch_limit = self._batch_limit(payload, config)
-        batches = self._batches(inventory["selected"], batch_limit)
-        fingerprint = self._fingerprint(
-            root,
-            inventory,
-            config,
-            provider.model_dump(mode="json"),
-            batch_limit,
-            planned_checks,
-        )
-        cache = self._cache_directory(root, fingerprint)
-        final_path = cache / "result.json"
-        cached = self._read_json(final_path)
-        manifest = {
-            "planFingerprint": fingerprint,
-            "cacheHit": bool(cached),
-            "plannedChecks": [item.model_dump(mode="json") for item in planned_checks],
-            "repositoryHead": GitRunner(root).run("rev-parse", "HEAD").stdout.strip(),
-            "baseBranch": snapshot.base_branch,
-            "upstream": snapshot.upstream,
-            "synchronization": "local tracking reference; no fetch performed",
-            "eligibleFiles": sum(1 for item in inventory["files"] if item["status"] != "excluded"),
-            "excludedFiles": sum(1 for item in inventory["files"] if item["status"] == "excluded"),
-            "redactions": inventory["redactions"],
-            "totalSelectedCharacters": inventory["characters"],
-            "batches": len(batches),
-            "providerRequests": len(batches) + 1,
-            "providerRequestsEstimated": True,
-            "batchManifest": [
-                {
-                    "batch": index + 1,
-                    "sources": re.findall(r"(?m)^## (.+?) lines (\d+-\d+)$", batch),
-                    "characters": len(batch),
-                }
-                for index, batch in enumerate(batches)
-            ],
-            "provider": provider.name,
-            "providerId": provider.id,
-            "model": provider.model_name,
-            "variant": provider.variant_name,
-            "destination": "local" if not provider.sends_code_remotely else provider.name,
-            "privacyCategory": provider.kind.value,
-            "files": inventory["files"],
-        }
-        return {
-            "manifest": manifest,
-            "fingerprint": fingerprint,
-            "root": root,
-            "config": config,
-            "adapter": adapter,
-            "provider": provider,
-            "inventory": inventory,
-            "planned_checks": planned_checks,
-            "repository_map": repository_map,
-            "batches": batches,
-            "cache": cache,
-            "cached": cached,
-            "final_path": final_path,
-        }
-
-    def _execute(self, plan: dict[str, Any], emit: Any) -> dict[str, Any]:
-        root, config, adapter, provider = (
-            plan[key] for key in ("root", "config", "adapter", "provider")
-        )
-        inventory, planned_checks, repository_map, batches = (
-            plan[key] for key in ("inventory", "planned_checks", "repository_map", "batches")
-        )
-        cache, cached, final_path, manifest, fingerprint = (
-            plan[key] for key in ("cache", "cached", "final_path", "manifest", "fingerprint")
-        )
-        if cached:
-            return {**cached, "cacheHit": True}
-
-        checks = CheckRunner().run(root, planned_checks)
-
-        verify_with_external_scanner("\n".join(inventory["selected"].values()))
-        drafts = []
-        reused = 0
-        for index, batch in enumerate(batches):
-            batch_hash = hashlib.sha256(batch.encode()).hexdigest()
-            batch_path = cache / "batches" / f"{index:04d}-{batch_hash}.json"
-            parsed = self._read_json(batch_path)
-            if parsed:
-                reused += 1
-            else:
-                emit(
-                    "scan_progress",
-                    {
-                        "stage": "review",
-                        "batch": index + 1,
-                        "batches": len(batches),
-                        "message": f"Reviewing batch {index + 1} of {len(batches)}",
-                    },
-                )
-                raw = adapter.review(
-                    self._batch_prompt(repository_map, checks, batch), provider_output_schema()
-                )
-                try:
-                    response = parse_provider_response(raw)
-                except CodePreflightError:
-                    repaired = adapter.review(self._repair_prompt(raw), provider_output_schema())
-                    response = parse_provider_response(repaired)
-                parsed = response.model_dump(mode="json")
-                self._atomic_json(batch_path, parsed)
-            response = parse_provider_response(json.dumps(parsed))
-            drafts.extend(response.findings)
-
-        emit("scan_progress", {"stage": "verification", "message": "Verifying evidence"})
-        findings, rejected = FindingVerifier().verify(root, drafts, target="full")
-        for finding in findings:
-            emit("finding", {"finding": finding.model_dump(mode="json")})
-        synthesis_payload = {
-            "repositoryMap": repository_map,
-            "verifiedFindings": [finding.model_dump(mode="json") for finding in findings],
-            "rejectedFindings": rejected,
-        }
-        emit("scan_progress", {"stage": "synthesis", "message": "Synthesizing verified results"})
-        synthesis_raw = adapter.review(
-            self._synthesis_prompt(synthesis_payload), provider_output_schema()
-        )
-        try:
-            summary = parse_provider_response(synthesis_raw).summary
-        except CodePreflightError:
-            summary = (
-                f"Full scan completed with {len(findings)} verified or partially verified "
-                f"finding(s); {rejected} unsupported finding(s) were rejected."
-            )
-        result = {
-            "status": "completed",
-            "summary": summary,
-            "provider": provider.model_dump(mode="json"),
-            "findings": [finding.model_dump(mode="json") for finding in findings],
-            "rejectedFindings": rejected,
-            "rejected_findings": rejected,
-            "blocking": False,
-            "checks": [check.model_dump(mode="json") for check in checks],
-            "context": {
-                "checks": [check.model_dump(mode="json") for check in checks],
-            },
-            "manifest": manifest,
-            "fingerprint": fingerprint,
-            "resumedBatches": reused,
-            "cacheHit": False,
-        }
-        self._atomic_json(final_path, result)
-        return result
+class _ScanTools:
+    """Internal bounded inventory, evidence and cache mechanics shared by both workflows."""
 
     def _guard_blockers(self, root: Path, snapshot: Any) -> list[dict[str, Any]]:
         blockers: list[dict[str, Any]] = []
@@ -520,3 +290,260 @@ class FullScanOrchestrator:
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         temporary.replace(path)
+
+
+class ScanPlanner(_ScanTools):
+    """Read-only plan construction, including complete blockers and immutable fingerprint."""
+
+    def plan(self, path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+        """Read-only preview: never runs configured checks or review requests."""
+        snapshot = RepositoryInspector().inspect(path)
+        root = Path(snapshot.root)
+        config = load_config(root)
+        provider_id = str(
+            payload.get("provider") or config.get("review", {}).get("provider", "ollama")
+        )
+        adapter = ProviderRegistry(config).adapter(provider_id)
+        provider = adapter.descriptor
+        readiness = review_readiness(
+            provider,
+            verified=ProviderHealth(root).verified(provider, config),
+            require_verified=True,
+        )
+        blockers = [*readiness["blockers"], *self._guard_blockers(root, snapshot)]
+        if (
+            config.get("checks") or provider.kind == ProviderKind.SUBSCRIPTION_CLI
+        ) and not is_trusted(root):
+            blockers.append(
+                {
+                    "code": "repository_not_trusted",
+                    "message": "Approve repository trust",
+                    "action": {"type": "trust_repository"},
+                }
+            )
+        if blockers:
+            raise CodePreflightError(
+                "scan_blocked",
+                "; ".join(item["message"] for item in blockers),
+                recoverable=True,
+                details={
+                    "blockers": blockers,
+                    "actions": [item.get("action", {"type": "retry"}) for item in blockers],
+                },
+            )
+
+        inventory = self._inventory(root, config)
+        planned_checks = [CheckDefinition.model_validate(item) for item in config.get("checks", [])]
+        repository_map = self._repository_map(snapshot, inventory)
+        batch_limit = self._batch_limit(payload, config)
+        batches = self._batches(inventory["selected"], batch_limit)
+        fingerprint = self._fingerprint(
+            root,
+            inventory,
+            config,
+            provider.model_dump(mode="json"),
+            batch_limit,
+            planned_checks,
+        )
+        cache = self._cache_directory(root, fingerprint)
+        final_path = cache / "result.json"
+        cached = self._read_json(final_path)
+        manifest = {
+            "planFingerprint": fingerprint,
+            "cacheHit": bool(cached),
+            "plannedChecks": [item.model_dump(mode="json") for item in planned_checks],
+            "repositoryHead": GitRunner(root).run("rev-parse", "HEAD").stdout.strip(),
+            "baseBranch": snapshot.base_branch,
+            "upstream": snapshot.upstream,
+            "synchronization": "local tracking reference; no fetch performed",
+            "eligibleFiles": sum(1 for item in inventory["files"] if item["status"] != "excluded"),
+            "excludedFiles": sum(1 for item in inventory["files"] if item["status"] == "excluded"),
+            "redactions": inventory["redactions"],
+            "totalSelectedCharacters": inventory["characters"],
+            "batches": len(batches),
+            "providerRequests": len(batches) + 1,
+            "providerRequestsEstimated": True,
+            "batchManifest": [
+                {
+                    "batch": index + 1,
+                    "sources": re.findall(r"(?m)^## (.+?) lines (\d+-\d+)$", batch),
+                    "characters": len(batch),
+                }
+                for index, batch in enumerate(batches)
+            ],
+            "provider": provider.name,
+            "providerId": provider.id,
+            "model": provider.model_name,
+            "variant": provider.variant_name,
+            "destination": "local" if not provider.sends_code_remotely else provider.name,
+            "privacyCategory": provider.kind.value,
+            "files": inventory["files"],
+        }
+        return {
+            "manifest": manifest,
+            "fingerprint": fingerprint,
+            "root": root,
+            "config": config,
+            "adapter": adapter,
+            "provider": provider,
+            "inventory": inventory,
+            "planned_checks": planned_checks,
+            "repository_map": repository_map,
+            "batches": batches,
+            "cache": cache,
+            "cached": cached,
+            "final_path": final_path,
+        }
+
+
+class ScanExecutor(_ScanTools):
+    """Revalidate approved plans before performing checks or provider requests."""
+
+    def execute(
+        self,
+        path: Path,
+        payload: dict[str, Any],
+        plan_fingerprint: str,
+        *,
+        approved: bool,
+        emit: Any,
+    ) -> dict[str, Any]:
+        if not approved:
+            raise CodePreflightError(
+                "full_scan_confirmation_required",
+                "Explicit scan approval is required",
+                recoverable=True,
+            )
+        plan = ScanPlanner().plan(path, payload)
+        if plan_fingerprint != plan["fingerprint"]:
+            raise CodePreflightError(
+                "scan_plan_stale",
+                "Scan preview changed; preview and approve again",
+                recoverable=True,
+            )
+        try:
+            result = self._execute(plan, emit)
+        except CodePreflightError as error:
+            if error.code.startswith("provider_"):
+                ProviderHealth(plan["root"]).invalidate(plan["provider"])
+            raise
+        ProviderHealth(plan["root"]).record(plan["provider"], plan["config"])
+        return result
+
+    def _execute(self, plan: dict[str, Any], emit: Any) -> dict[str, Any]:
+        root, config, adapter, provider = (
+            plan[key] for key in ("root", "config", "adapter", "provider")
+        )
+        inventory, planned_checks, repository_map, batches = (
+            plan[key] for key in ("inventory", "planned_checks", "repository_map", "batches")
+        )
+        cache, cached, final_path, manifest, fingerprint = (
+            plan[key] for key in ("cache", "cached", "final_path", "manifest", "fingerprint")
+        )
+        if cached:
+            return {**cached, "cacheHit": True}
+
+        checks = CheckRunner().run(root, planned_checks)
+
+        verify_with_external_scanner("\n".join(inventory["selected"].values()))
+        drafts = []
+        reused = 0
+        for index, batch in enumerate(batches):
+            batch_hash = hashlib.sha256(batch.encode()).hexdigest()
+            batch_path = cache / "batches" / f"{index:04d}-{batch_hash}.json"
+            parsed = self._read_json(batch_path)
+            if parsed:
+                reused += 1
+            else:
+                emit(
+                    "scan_progress",
+                    {
+                        "stage": "review",
+                        "batch": index + 1,
+                        "batches": len(batches),
+                        "message": f"Reviewing batch {index + 1} of {len(batches)}",
+                    },
+                )
+                raw = adapter.review(
+                    self._batch_prompt(repository_map, checks, batch), provider_output_schema()
+                )
+                try:
+                    response = parse_provider_response(raw)
+                except CodePreflightError:
+                    repaired = adapter.review(self._repair_prompt(raw), provider_output_schema())
+                    response = parse_provider_response(repaired)
+                parsed = response.model_dump(mode="json")
+                self._atomic_json(batch_path, parsed)
+            response = parse_provider_response(json.dumps(parsed))
+            drafts.extend(response.findings)
+
+        emit("scan_progress", {"stage": "verification", "message": "Verifying evidence"})
+        findings, rejected = FindingVerifier().verify(root, drafts, target="full")
+        for finding in findings:
+            emit("finding", {"finding": finding.model_dump(mode="json")})
+        synthesis_payload = {
+            "repositoryMap": repository_map,
+            "verifiedFindings": [finding.model_dump(mode="json") for finding in findings],
+            "rejectedFindings": rejected,
+        }
+        emit("scan_progress", {"stage": "synthesis", "message": "Synthesizing verified results"})
+        synthesis_raw = adapter.review(
+            self._synthesis_prompt(synthesis_payload), provider_output_schema()
+        )
+        try:
+            summary = parse_provider_response(synthesis_raw).summary
+        except CodePreflightError:
+            summary = (
+                f"Full scan completed with {len(findings)} verified or partially verified "
+                f"finding(s); {rejected} unsupported finding(s) were rejected."
+            )
+        result = {
+            "status": "completed",
+            "summary": summary,
+            "provider": provider.model_dump(mode="json"),
+            "findings": [finding.model_dump(mode="json") for finding in findings],
+            "rejectedFindings": rejected,
+            "rejected_findings": rejected,
+            "blocking": False,
+            "checks": [check.model_dump(mode="json") for check in checks],
+            "context": {
+                "checks": [check.model_dump(mode="json") for check in checks],
+            },
+            "manifest": manifest,
+            "fingerprint": fingerprint,
+            "resumedBatches": reused,
+            "cacheHit": False,
+        }
+        self._atomic_json(final_path, result)
+        return result
+
+
+class FullScanOrchestrator:
+    """Protocol-facing scan workflow: previews are never implicit authorization."""
+
+    def scan(self, path: Path, payload: dict[str, Any], emit: Any) -> dict[str, Any]:
+        if payload.get("fullScanApproved"):
+            return ScanExecutor().execute(
+                path, payload, str(payload.get("planFingerprint", "")), approved=True, emit=emit
+            )
+        plan = ScanPlanner().plan(path, payload)
+        manifest = plan["manifest"]
+        if payload.get("action") == "plan":
+            return {"manifest": manifest, "planFingerprint": plan["fingerprint"]}
+        emit(
+            "consent_required",
+            {
+                "fullScan": True,
+                "provider": plan["provider"].model_dump(mode="json"),
+                "manifest": manifest,
+            },
+        )
+        raise CodePreflightError(
+            "full_scan_confirmation_required",
+            "Review and approve this exact scan preview",
+            recoverable=True,
+            details={
+                "planFingerprint": plan["fingerprint"],
+                "actions": [{"type": "approve_transmission", "scope": "full_scan"}],
+            },
+        )

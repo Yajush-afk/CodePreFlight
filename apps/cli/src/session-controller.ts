@@ -11,6 +11,7 @@ import { SuggestionCoordinator } from "./suggestion-coordinator.js";
 import { OnboardingCoordinator } from "./onboarding-coordinator.js";
 import { WorkflowCoordinator } from "./workflow-coordinator.js";
 import { GitGraphPresenter, type GitGraph } from "./git-graph-presenter.js";
+import { WorkspacePresenter } from "./workspace-presenter.js";
 
 export interface SessionEngine {
   request(
@@ -708,24 +709,7 @@ export class SessionController {
         unstaged: files.filter((file) => file.unstaged).length,
         untracked: files.filter((file) => file.untracked).length,
         conflicts: snapshot.conflicts?.length ?? 0,
-        provider: selected?.name ?? "Not configured",
-        providerId: selected?.id,
-        providerAvailability:
-          selected?.readiness?.state === "action_required"
-            ? "Action required"
-            : (selected?.readiness?.state ?? selected?.availability),
-        providerAuthentication: selected?.authentication,
-        providerModel:
-          selected?.model_name ??
-          (selected?.model === "not_applicable"
-            ? "provider default"
-            : (selected?.model ?? "unknown")),
-        providerVariant: selected?.variant_name ?? "provider default",
-        providerPrivacy: selected
-          ? selected.sends_code_remotely
-            ? `remote ${selected.kind ?? "provider"}`
-            : "local"
-          : "not configured",
+        ...this.providerHeader(selected),
         pullRequest: "not checked",
         reviewMode: this.automation.mode ?? "manual",
       },
@@ -787,6 +771,31 @@ export class SessionController {
         },
       });
     });
+  }
+
+  private providerHeader(
+    selected?: ProviderView,
+  ): Partial<SessionHeader> & { provider: string } {
+    return {
+      provider: selected?.name ?? "Not configured",
+      providerId: selected?.id,
+      providerAvailability:
+        selected?.readiness?.state === "action_required"
+          ? "Action required"
+          : (selected?.readiness?.state ?? selected?.availability),
+      providerAuthentication: selected?.authentication,
+      providerModel:
+        selected?.model_name ??
+        (selected?.model === "not_applicable"
+          ? "provider default"
+          : (selected?.model ?? "unknown")),
+      providerVariant: selected?.variant_name ?? "provider default",
+      providerPrivacy: selected
+        ? selected.sends_code_remotely
+          ? `remote ${selected.kind ?? "provider"}`
+          : "local"
+        : "not configured",
+    };
   }
 
   private openModes(): void {
@@ -943,17 +952,7 @@ export class SessionController {
       );
       const job = response.job as Record<string, unknown> | undefined;
       const pr = response.prDetection as Record<string, unknown> | undefined;
-      if (pr && this.currentState.header) {
-        const pullRequest =
-          pr.available === false
-            ? `unavailable · ${String(pr.code ?? "configuration")}`
-            : pr.found
-              ? `#${String(pr.number)} · ${pr.reviewFingerprintCurrent ? "review current" : "review due"}`
-              : "none";
-        this.patch({
-          header: { ...this.currentState.header, pullRequest },
-        });
-      }
+      this.updatePullRequestHeader(pr);
       if (job?.id && job.status === "queued" && !job.coalesced) {
         void this.runAutomationJob(String(job.id));
       }
@@ -961,6 +960,20 @@ export class SessionController {
       if ((this.automation.mode ?? "manual") !== "manual") {
         this.appendError(error);
       }
+    }
+  }
+
+  private updatePullRequestHeader(pr?: Record<string, unknown>): void {
+    if (pr && this.currentState.header) {
+      const pullRequest =
+        pr.available === false
+          ? `unavailable · ${String(pr.code ?? "configuration")}`
+          : pr.found
+            ? `#${String(pr.number)} · ${pr.reviewFingerprintCurrent ? "review current" : "review due"}`
+            : "none";
+      this.patch({
+        header: { ...this.currentState.header, pullRequest },
+      });
     }
   }
 
@@ -1163,35 +1176,7 @@ export class SessionController {
       );
       const raw =
         (result.items as Array<Record<string, unknown>> | undefined) ?? [];
-      const items: SessionOverlayItem[] = raw.map(
-        (item): SessionOverlayItem => {
-          if (action === "tree") {
-            const path = String(item.path ?? "");
-            return {
-              label: `${String(item.status ?? "clean").padEnd(16)} ${path}`,
-              value: path,
-              action: { kind: "file", value: path },
-            };
-          }
-          if (action === "branches") {
-            const branch = String(item.name ?? "");
-            return {
-              label: `${item.current ? "●" : "○"} ${branch} · ${String(item.subject ?? "")}`,
-              value: branch,
-              action: {
-                kind: item.current ? "close" : "branch",
-                value: branch,
-              },
-            };
-          }
-          const revision = String(item.oid ?? "");
-          return {
-            label: `${item.merge ? "merge " : ""}${String(item.shortOid ?? "")} · ${String(item.subject ?? "")}`,
-            value: revision,
-            action: { kind: "commit", value: revision },
-          };
-        },
-      );
+      const items = new WorkspacePresenter().navigationItems(action, raw);
       this.patch({
         overlay: {
           kind: action,
@@ -1397,31 +1382,7 @@ export class SessionController {
             return;
           }
           const message = messageOverride ?? String(preparation.message ?? "");
-          this.requestDecision(
-            "Create this commit?",
-            `Message: ${message}\nStaged fingerprint: ${String(preparation.fingerprint).slice(0, 12)}\nUse /commit <message> to provide an edited message before approval.`,
-            "create commit",
-            async () => {
-              await this.runBusy("Creating approved commit…", async () => {
-                const result = await this.engine.request(
-                  "commit",
-                  this.options.repositoryPath,
-                  {
-                    action: "execute",
-                    approved: true,
-                    message,
-                    fingerprint: preparation.fingerprint,
-                  },
-                );
-                await this.refreshContext();
-                this.append({
-                  kind: "system",
-                  title: "Commit created",
-                  body: `${String(result.commit ?? result.revision ?? "Commit completed")} · ${message}`,
-                });
-              });
-            },
-          );
+          this.confirmCommit(preparation, message);
         } catch (error) {
           if (
             error instanceof EngineRequestError &&
@@ -1437,6 +1398,37 @@ export class SessionController {
         this.finishRequest(request);
       }
     });
+  }
+
+  private confirmCommit(
+    preparation: Record<string, unknown>,
+    message: string,
+  ): void {
+    this.requestDecision(
+      "Create this commit?",
+      `Message: ${message}\nStaged fingerprint: ${String(preparation.fingerprint).slice(0, 12)}\nUse /commit <message> to provide an edited message before approval.`,
+      "create commit",
+      async () => {
+        await this.runBusy("Creating approved commit…", async () => {
+          const result = await this.engine.request(
+            "commit",
+            this.options.repositoryPath,
+            {
+              action: "execute",
+              approved: true,
+              message,
+              fingerprint: preparation.fingerprint,
+            },
+          );
+          await this.refreshContext();
+          this.append({
+            kind: "system",
+            title: "Commit created",
+            body: `${String(result.commit ?? result.revision ?? "Commit completed")} · ${message}`,
+          });
+        });
+      },
+    );
   }
 
   private confirmLogin(provider: string): void {
@@ -1687,13 +1679,7 @@ export class SessionController {
 
   private handleEngineEvent(event: EngineEvent): void {
     if (event.event.startsWith("operation_")) {
-      const record = event.payload as unknown as OperationRecord;
-      this.activityStore.update(record);
-      if (record.actor !== "Git")
-        this.patch({
-          activeActor: record.status === "running" ? record.actor : "Preflight",
-          activity: `${record.actor} ${record.status === "running" ? "is running" : record.status} ${record.category}`,
-        });
+      this.handleOperationEvent(event);
       return;
     }
     if (event.event === "workflow_stage") {
@@ -1708,34 +1694,37 @@ export class SessionController {
     if (event.event === "scan_progress") {
       this.patch({ activity: String(event.payload?.message ?? "Scanning…") });
       const stage = String(event.payload?.stage ?? "");
-      this.advancePipeline(
-        stage === "review"
-          ? "review"
-          : stage === "verification"
-            ? "verify"
-            : stage,
-      );
+      this.advancePipeline(stage === "verification" ? "verify" : stage);
     }
-    if (event.event === "consent_required") {
-      if (event.payload?.fullScan) {
-        this.fullScanManifest = event.payload.manifest as Record<
-          string,
-          unknown
-        >;
-        return;
-      }
-      const provider = event.payload?.provider as
-        { id?: string; name?: string; kind?: string } | undefined;
-      const manifest = event.payload?.manifest as
-        { total_characters?: number; redactions?: number } | undefined;
-      this.disclosure = {
-        providerId: provider?.id ?? "unknown",
-        providerName: provider?.name ?? "unknown provider",
-        kind: provider?.kind ?? "unknown",
-        characters: manifest?.total_characters ?? 0,
-        redactions: manifest?.redactions ?? 0,
-      };
+    if (event.event === "consent_required") this.handleConsentEvent(event);
+  }
+
+  private handleOperationEvent(event: EngineEvent): void {
+    const record = event.payload as unknown as OperationRecord;
+    this.activityStore.update(record);
+    if (record.actor !== "Git")
+      this.patch({
+        activeActor: record.status === "running" ? record.actor : "Preflight",
+        activity: `${record.actor} ${record.status === "running" ? "is running" : record.status} ${record.category}`,
+      });
+  }
+
+  private handleConsentEvent(event: EngineEvent): void {
+    if (event.payload?.fullScan) {
+      this.fullScanManifest = event.payload.manifest as Record<string, unknown>;
+      return;
     }
+    const provider = event.payload?.provider as
+      { id?: string; name?: string; kind?: string } | undefined;
+    const manifest = event.payload?.manifest as
+      { total_characters?: number; redactions?: number } | undefined;
+    this.disclosure = {
+      providerId: provider?.id ?? "unknown",
+      providerName: provider?.name ?? "unknown provider",
+      kind: provider?.kind ?? "unknown",
+      characters: manifest?.total_characters ?? 0,
+      redactions: manifest?.redactions ?? 0,
+    };
   }
 
   private requestConsent(retry: Retry): void {

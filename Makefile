@@ -10,6 +10,7 @@ build:
 check:
 	npm run protocol:check
 	npm run check
+	node scripts/check_complexity.mjs
 	uv run --project engine ruff check engine scripts
 	uv run --project engine ruff format --check engine scripts
 	uv run --project engine mypy engine/src
