@@ -1902,18 +1902,22 @@ export class SessionController {
       .map((raw) => {
         const action = raw as Record<string, unknown>;
         const type = String(action.type ?? "retry");
-        if (type === "select_provider" || type === "select_model")
-          return "/provider";
-        if (type === "authenticate_provider")
-          return `/providerlogin ${String(action.provider ?? "<provider>")}`;
-        if (type === "pull_ollama_model")
-          return `preflight provider pull ${String(action.model ?? "<model>")} --yes`;
-        if (type === "trust_repository") return "preflight init --trust";
-        if (type === "open_configuration")
-          return "inspect your private preference, global config, or optional team config";
-        if (type === "approve_transmission")
-          return "review the manifest and approve";
-        return "retry after resolving the reported repository state";
+        const labels: Record<string, string> = {
+          select_provider: "/provider",
+          select_model: "/model",
+          test_provider: `/providertest ${String(action.provider ?? "<provider>")}`,
+          install_provider: "install the official provider CLI, then /provider",
+          update_provider: "update the official provider CLI, then /provider",
+          authenticate_provider: `/providerlogin ${String(action.provider ?? "<provider>")}`,
+          pull_ollama_model: `preflight provider pull ${String(action.model ?? "<model>")} --yes`,
+          trust_repository: "preflight init --trust",
+          open_configuration:
+            "inspect your private preference, global config, or optional team config",
+          approve_transmission: "review the manifest and approve",
+        };
+        return (
+          labels[type] ?? "retry after resolving the reported repository state"
+        );
       })
       .join(" · ");
   }
