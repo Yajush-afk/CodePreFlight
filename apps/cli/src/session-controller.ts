@@ -8,6 +8,7 @@ import type { EngineCommand, EngineEvent } from "./protocol.js";
 import { ActivityStore, type OperationRecord } from "./activity-store.js";
 import { CommandRegistry, type Suggestion } from "./command-registry.js";
 import { SuggestionCoordinator } from "./suggestion-coordinator.js";
+import { OnboardingCoordinator } from "./onboarding-coordinator.js";
 
 export interface SessionEngine {
   request(
@@ -76,6 +77,7 @@ export interface SessionAction {
     | "branch"
     | "commit"
     | "review"
+    | "setup"
     | "close";
   value: string;
 }
@@ -207,6 +209,9 @@ export class SessionController {
   private readonly engine: SessionEngine;
   private readonly activityStore = new ActivityStore();
   private readonly commands = new CommandRegistry();
+  private readonly onboarding = new OnboardingCoordinator();
+  private repositoryTrusted = false;
+  private repositoryConfiguration: unknown;
   private readonly suggestions = new SuggestionCoordinator(
     this.commands,
     (command) => this.loadArguments(command),
@@ -238,6 +243,13 @@ export class SessionController {
       });
       this.appendAutomationUpdates();
       this.patch({ started: true, busy: false, activity: undefined });
+      if (
+        !this.activeProvider() ||
+        (this.activeProvider()?.readiness?.state ??
+          this.activeProvider()?.availability) !== "ready" ||
+        !this.repositoryTrusted
+      )
+        this.startSetup();
       this.startJobObservation();
     } catch (error) {
       this.appendError(error);
@@ -373,7 +385,7 @@ export class SessionController {
           : this.openWorkspace("commits"),
       scanfull: () => this.fullScan(false),
       commit: () => this.commit(argument || undefined),
-      provider: () => this.openProviders(),
+      provider: () => this.startSetup(),
       model: () => this.openModels(),
       variant: () => this.openVariants(),
       providerlogin: () =>
@@ -451,8 +463,88 @@ export class SessionController {
             ? this.openWorkspace("commits")
             : this.review(action.value),
         close: () => {},
+        setup: () => this.setupAction(action.value),
       };
     await handlers[action.kind]();
+  }
+
+  private startSetup(): void {
+    this.onboarding.active = true;
+    this.continueSetup();
+  }
+
+  private continueSetup(): void {
+    if (!this.onboarding.active) return;
+    const step = this.onboarding.next(
+      this.activeProvider(),
+      this.repositoryTrusted,
+    );
+    if (!step) {
+      this.onboarding.active = false;
+      this.openProviders();
+      return;
+    }
+    const items: SessionOverlayItem[] = [
+      {
+        label: step.label,
+        value: step.action,
+        action: { kind: "setup", value: step.action },
+      },
+    ];
+    if (step.optional)
+      items.push({
+        label: "Skip this optional step",
+        value: "next",
+        action: { kind: "setup", value: `skip:${step.action}` },
+      });
+    items.push({
+      label: "Continue without AI",
+      value: "skip",
+      action: { kind: "setup", value: "skip" },
+    });
+    this.patch({
+      overlay: { kind: "providers", title: step.title, body: step.body, items },
+    });
+  }
+
+  private async setupAction(action: string): Promise<void> {
+    if (action === "skip") {
+      this.onboarding.active = false;
+      this.patch({ overlay: undefined });
+      return;
+    }
+    if (action.startsWith("skip:")) {
+      this.onboarding.skip(this.activeProvider(), action.slice(5));
+      this.continueSetup();
+      return;
+    }
+    const provider = this.activeProviderId ?? "";
+    const handlers: Record<string, () => void | Promise<void>> = {
+      providers: () => this.openProviders(),
+      login: () => this.confirmLogin(provider),
+      model: () => this.openModels(),
+      variant: () => this.openVariants(),
+      test: () => this.confirmProviderTest(provider),
+      trust: () => this.confirmTrust(),
+    };
+    await handlers[action]?.();
+  }
+
+  private confirmTrust(): void {
+    this.requestDecision(
+      "Trust this repository configuration?",
+      JSON.stringify(this.repositoryConfiguration, null, 2),
+      "trust configuration",
+      async () => {
+        await this.runBusy("Saving repository trust…", async () => {
+          await this.engine.request("init", this.options.repositoryPath, {
+            trust: true,
+          });
+          await this.refreshContext();
+        });
+        this.continueSetup();
+      },
+    );
   }
 
   async suggest(input: string): Promise<Suggestion[]> {
@@ -555,6 +647,8 @@ export class SessionController {
     const snapshot = status.repository as RepositorySnapshot;
     const configuration = status.configuration as
       { review?: { provider?: string } } | undefined;
+    this.repositoryTrusted = status.trusted === true;
+    this.repositoryConfiguration = status.configuration;
     this.providers =
       (providerResult.providers as ProviderView[] | undefined) ?? [];
     this.activeProviderId = configuration?.review?.provider;
@@ -1103,11 +1197,16 @@ export class SessionController {
   }
 
   private async fullScan(approved: boolean): Promise<void> {
-    if (!this.activeProviderId) {
+    const provider = this.activeProvider();
+    if (
+      !provider ||
+      (provider.readiness?.state ?? provider.availability) !== "ready" ||
+      !provider.readiness?.invocationVerified
+    ) {
       this.append({
         kind: "error",
         title: "Select a review provider",
-        body: "A full scan requires a ready provider. Use /provider first.",
+        body: "A full scan requires a ready, tested reviewer. Use /provider to finish setup or /providertest to verify the connection.",
       });
       return;
     }
@@ -1250,7 +1349,10 @@ export class SessionController {
     const descriptor = this.providers.find((item) => item.id === provider);
     this.requestDecision(
       `Authenticate ${descriptor?.name ?? provider}?`,
-      "CodePreFlight will temporarily clear the TUI and give this provider's official CLI full terminal control. Credentials remain owned by the provider CLI.",
+      "CodePreFlight will temporarily clear the TUI and give this provider's official CLI full terminal control. Credentials remain owned by the provider CLI. This may affect the account used by other applications." +
+        (provider === "claude"
+          ? " Claude CLI is experimental; confirm provider policy and billing before proceeding."
+          : ""),
       "open provider login",
       async () => this.login(provider),
     );
@@ -1273,6 +1375,7 @@ export class SessionController {
         body: `${provider} authentication verified.`,
       });
     });
+    this.continueSetup();
   }
 
   private async configureProvider(
@@ -1310,7 +1413,10 @@ export class SessionController {
       });
       this.requestDecision(
         `Use ${provider}${model ? ` · ${model}` : ""}${variant ? ` · ${variant}` : ""}?`,
-        "This saves a private preference under .git/codepreflight/. It will not appear in Git status or affect teammates.",
+        "This saves a private preference under .git/codepreflight/. Selecting a provider does not establish readiness." +
+          (provider === "claude"
+            ? " Claude CLI is experimental; verify provider policy and billing before activation."
+            : ""),
         "write configuration",
         async () => {
           await this.runBusy("Saving provider configuration…", async () => {
@@ -1328,6 +1434,8 @@ export class SessionController {
               body: `${provider} is now your private review provider for this repository.`,
             });
           });
+          this.onboarding.active = true;
+          this.continueSetup();
         },
       );
     });
@@ -1350,12 +1458,18 @@ export class SessionController {
           title: "Provider test",
           body: `${provider} · ${result.ready ? "ready" : "failed"}\n${String(result.summary ?? "")}`,
         });
+        await this.refreshContext();
       },
     );
+    this.continueSetup();
   }
 
   private async review(target: string, revision?: string): Promise<void> {
-    if (!this.activeProviderId) {
+    if (
+      !this.activeProviderId ||
+      (this.activeProvider()?.readiness?.state ??
+        this.activeProvider()?.availability) !== "ready"
+    ) {
       this.append({
         kind: "error",
         title: "Select a review provider",

@@ -20,6 +20,7 @@ const providers = {
       id: "codex",
       name: "Codex CLI",
       availability: "ready",
+      readiness: { state: "ready", invocationVerified: true },
       authentication: "authenticated",
       model: "not_applicable",
       model_name: "subscription default",
