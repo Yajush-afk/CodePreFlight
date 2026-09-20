@@ -276,6 +276,12 @@ def dispatch(request: EngineRequest) -> None:
             )
             return
         if action == "configure":
+            requested_scope = request.payload.get("scope")
+            config_scope = (
+                str(requested_scope)
+                if requested_scope
+                else ("global" if request.payload.get("global") else "personal")
+            )
             complete(
                 request.requestId,
                 configure_provider(
@@ -285,7 +291,7 @@ def dispatch(request: EngineRequest) -> None:
                     variant=(
                         str(request.payload["variant"]) if request.payload.get("variant") else None
                     ),
-                    global_scope=bool(request.payload.get("global", False)),
+                    scope=config_scope,
                     write=bool(request.payload.get("write", False)),
                 ),
             )

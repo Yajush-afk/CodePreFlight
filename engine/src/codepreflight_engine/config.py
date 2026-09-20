@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .errors import CodePreflightError
+from .git import GitRunner
 from .models import CheckDefinition
 
 SECRET_FRAGMENTS = ("api_key", "apikey", "token", "secret", "password", "credential")
@@ -67,6 +68,23 @@ class CodePreflightConfig(ConfigModel):
     base_branch: str | None = None
 
 
+class PersonalReviewSettings(ConfigModel):
+    provider: str | None = None
+
+
+class PersonalProviderSettings(ConfigModel):
+    model: str | None = None
+    variant: str | None = None
+
+
+class PersonalConfig(ConfigModel):
+    """Private per-repository preferences that may safely live under .git."""
+
+    version: Literal[1] | None = None
+    review: PersonalReviewSettings | None = None
+    providers: dict[str, PersonalProviderSettings] | None = None
+
+
 def global_config_path() -> Path:
     base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "codepreflight" / "config.toml"
@@ -74,6 +92,11 @@ def global_config_path() -> Path:
 
 def repository_config_path(root: Path) -> Path:
     return root / ".codepreflight.toml"
+
+
+def personal_config_path(root: Path) -> Path:
+    git_directory = Path(GitRunner(root).run("rev-parse", "--absolute-git-dir").stdout.strip())
+    return git_directory.resolve() / "codepreflight" / "preferences.toml"
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -118,18 +141,32 @@ def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_config(root: Path) -> dict[str, Any]:
-    merged = _merge(_read_toml(global_config_path()), _read_toml(repository_config_path(root)))
+    global_config = _read_toml(global_config_path())
+    repository_config = _read_toml(repository_config_path(root))
+    personal_path = personal_config_path(root)
+    personal_config = _read_toml(personal_path)
+    try:
+        PersonalConfig.model_validate(personal_config)
+    except ValidationError as error:
+        _raise_validation_error(error, code="invalid_personal_config", path=personal_path)
+
+    merged = _merge(_merge(global_config, repository_config), personal_config)
     try:
         CodePreflightConfig.model_validate(merged)
     except ValidationError as error:
-        fields = [
-            {"field": ".".join(str(part) for part in item["loc"]), "message": item["msg"]}
-            for item in error.errors()
-        ]
-        summary = "; ".join(f"{item['field']}: {item['message']}" for item in fields)
-        raise CodePreflightError(
-            "invalid_config",
-            f"Configuration validation failed: {summary}",
-            details={"fields": fields},
-        ) from error
+        _raise_validation_error(error, code="invalid_config")
     return merged
+
+
+def _raise_validation_error(error: ValidationError, *, code: str, path: Path | None = None) -> None:
+    fields = [
+        {"field": ".".join(str(part) for part in item["loc"]), "message": item["msg"]}
+        for item in error.errors()
+    ]
+    summary = "; ".join(f"{item['field']}: {item['message']}" for item in fields)
+    location = f" at {path}" if path else ""
+    raise CodePreflightError(
+        code,
+        f"Configuration validation failed{location}: {summary}",
+        details={"fields": fields, **({"path": str(path)} if path else {})},
+    ) from error

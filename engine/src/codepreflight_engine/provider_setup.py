@@ -10,7 +10,13 @@ from typing import Any
 
 import tomli_w
 
-from .config import CodePreflightConfig, global_config_path, repository_config_path
+from .config import (
+    CodePreflightConfig,
+    PersonalConfig,
+    global_config_path,
+    personal_config_path,
+    repository_config_path,
+)
 from .errors import CodePreflightError
 
 PROVIDER_IDS = {"ollama", "codex", "opencode", "claude", "openai-compatible"}
@@ -21,13 +27,24 @@ def configure_provider(
     *,
     provider_id: str,
     model: str | None,
-    global_scope: bool,
+    scope: str,
     write: bool,
     variant: str | None = None,
 ) -> dict[str, object]:
     if provider_id not in PROVIDER_IDS:
         raise CodePreflightError("unknown_provider", f"Unknown provider: {provider_id}")
-    path = global_config_path() if global_scope else repository_config_path(root)
+    paths = {
+        "personal": personal_config_path(root),
+        "global": global_config_path(),
+        "team": repository_config_path(root),
+    }
+    try:
+        path = paths[scope]
+    except KeyError as error:
+        raise CodePreflightError(
+            "invalid_config_scope",
+            f"Unknown configuration scope: {scope}",
+        ) from error
     current = path.read_text(encoding="utf-8") if path.exists() else ""
     try:
         config: dict[str, Any] = tomllib.loads(current) if current else {}
@@ -73,7 +90,10 @@ def configure_provider(
             )
         selected["variant"] = variant
 
-    CodePreflightConfig.model_validate(config)
+    if scope == "personal":
+        PersonalConfig.model_validate(config)
+    else:
+        CodePreflightConfig.model_validate(config)
     rendered = tomli_w.dumps(config)
     diff = "".join(
         unified_diff(
@@ -92,7 +112,7 @@ def configure_provider(
         "provider": provider_id,
         "model": model,
         "variant": variant,
-        "scope": "global" if global_scope else "repository",
+        "scope": scope,
         "path": str(path),
         "written": write,
         "preview": rendered,

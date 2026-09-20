@@ -1212,7 +1212,14 @@ export class SessionController {
       const preview = await this.engine.request(
         "provider",
         this.options.repositoryPath,
-        { action: "configure", provider, model, variant, write: false },
+        {
+          action: "configure",
+          provider,
+          model,
+          variant,
+          scope: "personal",
+          write: false,
+        },
       );
       this.append({
         kind: "status",
@@ -1223,7 +1230,7 @@ export class SessionController {
       });
       this.requestDecision(
         `Use ${provider}${model ? ` · ${model}` : ""}${variant ? ` · ${variant}` : ""}?`,
-        "This updates the repository's non-secret .codepreflight.toml configuration.",
+        "This saves a private preference under .git/codepreflight/. It will not appear in Git status or affect teammates.",
         "write configuration",
         async () => {
           await this.runBusy("Saving provider configuration…", async () => {
@@ -1232,12 +1239,13 @@ export class SessionController {
               provider,
               model,
               variant,
+              scope: "personal",
               write: true,
             });
             await this.refreshContext();
             this.append({
               kind: "system",
-              body: `${provider} is now the review provider.`,
+              body: `${provider} is now your private review provider for this repository.`,
             });
           });
         },
@@ -1540,7 +1548,8 @@ export class SessionController {
         if (type === "pull_ollama_model")
           return `preflight provider pull ${String(action.model ?? "<model>")} --yes`;
         if (type === "trust_repository") return "preflight init --trust";
-        if (type === "open_configuration") return "inspect .codepreflight.toml";
+        if (type === "open_configuration")
+          return "inspect your private preference, global config, or optional team config";
         if (type === "approve_transmission")
           return "review the manifest and approve";
         return "retry after resolving the reported repository state";

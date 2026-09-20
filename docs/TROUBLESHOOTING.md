@@ -3,12 +3,11 @@
 Start with `preflight doctor` and `preflight providers`.
 
 - `provider_unavailable`: install or authenticate the selected CLI, start Ollama, or select
-  another provider in `.codepreflight.toml`.
+  another provider with `preflight provider use <id> --write`.
 - `provider_consent_required`: inspect the provider disclosure and rerun the user-triggered
   command with `--approve` if the destination is acceptable.
-- `repository_not_trusted`: review `.codepreflight.toml`, then run `preflight init --write`
-  in a repository without a config. If an existing config changed, review it and run
-  `preflight init --trust` to refresh local trust state.
+- `repository_not_trusted`: run `preflight init --trust` after reviewing the repository and any
+  team `.codepreflight.toml`. The approval is private under `.git`; no team file is required.
 - `base_branch_required` or `base_branch_invalid`: pass `--base <branch>` explicitly.
 - `provider_output_invalid`: the provider did not return schema-valid JSON. Retry with a
   compatible model or inspect the provider's own authentication and version. Reviews make

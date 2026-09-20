@@ -67,7 +67,7 @@ class ReviewOrchestrator:
             raise CodePreflightError(
                 "repository_not_trusted",
                 "This repository configuration contains executable checks; "
-                "run `preflight init --write` or approve it before review",
+                "run `preflight init --team --write` or approve it before review",
             )
         target = str(payload.get("target", "staged"))
         if target not in {"staged", "commit", "branch", "pull_request"}:

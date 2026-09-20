@@ -37,8 +37,8 @@ terminal view, or use direct commands:
 
 ```bash
 preflight status
-preflight init
 preflight provider list
+preflight provider use codex --write
 preflight review --staged
 preflight review --commit HEAD
 preflight review --branch
@@ -48,10 +48,13 @@ preflight scan full
 preflight pr prepare
 ```
 
-`preflight init` previews the proposed `.codepreflight.toml`; `preflight init --write`
-writes and trusts it. Repository configuration may contain review rules, ignore patterns,
-approved check commands, base-branch settings, and provider model names, but never secrets.
-API credentials stay in environment variables. Before any remote provider receives code,
+Normal personal use creates no files in the repository. Provider, model, and variant choices
+are stored privately under `.git/codepreflight/`, where Git never tracks them. Machine-wide
+defaults live in the XDG user configuration. Teams may explicitly run `preflight init --team`
+to preview an optional `.codepreflight.toml`, then `preflight init --team --write` to share
+review rules, ignore patterns, approved checks, and base-branch settings. API credentials stay
+in environment variables. Authenticated provider CLIs require `preflight init --trust`, whose
+approval also stays privately under `.git`. Before any remote provider receives code,
 CodePreFlight displays the destination, selected-context size, redactions, and context
 manifest and requires explicit approval.
 
@@ -100,7 +103,7 @@ git -C "$demo_dir" commit -m "Add validated session creation"
 cp evaluation/seeded/auth_validation/after.py "$demo_dir/auth.py"
 git -C "$demo_dir" add auth.py
 cd "$demo_dir"
-preflight init
+preflight provider use ollama --model qwen2.5-coder:7b --write
 preflight status
 preflight review --staged --provider ollama
 ```
@@ -123,6 +126,7 @@ Detailed operational documentation:
 - [Installation, upgrade, and uninstall](docs/INSTALL.md)
 - [Interactive repository session](docs/INTERACTIVE_SESSION.md)
 - [Provider setup and authentication](docs/PROVIDERS.md)
+- [Configuration scopes](docs/CONFIGURATION.md)
 - [Acceptance demo recording guide](docs/DEMO.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Privacy, local logs, and threat model](docs/PRIVACY_AND_SECURITY.md)

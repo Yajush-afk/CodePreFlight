@@ -12,30 +12,27 @@ npm link --workspace @codepreflight/cli
 preflight doctor
 ```
 
-Run `preflight init` inside a repository to preview the detected configuration. Review
-that preview, then use `preflight init --write` to create `.codepreflight.toml` and trust
-its deterministic checks. The repository configuration is team-shareable; credentials
-must stay in environment variables or provider-owned authentication.
+No repository initialization is required for personal use. Select a provider with
+`preflight provider use <id> --write`; CodePreFlight stores that choice privately under
+`.git/codepreflight/`, so it does not appear in Git status.
+Before first use of an authenticated provider CLI, run `preflight init --trust` to record private
+repository approval under the same Git metadata directory.
+
+Teams that want shared rules and approved deterministic checks can run `preflight init --team`
+to preview an optional `.codepreflight.toml`, then `preflight init --team --write` to create
+and trust it. Credentials must stay in environment variables or provider-owned authentication.
 
 ## Provider configuration
 
-Run `preflight providers` before selecting a provider. Ollama is the default and keeps
-the request on the local machine. CLI providers reuse their own installed authentication.
+Run `preflight providers` before selecting a provider. Ollama keeps the request on the local
+machine. CLI providers reuse their own installed authentication.
 An OpenAI-compatible endpoint reads its API key from an environment variable.
 
 ```toml
+rules = ["Public API changes require tests"]
+
 [review]
-provider = "ollama"
 policy = "warning"
-
-[providers.ollama]
-model = "qwen2.5-coder:7b"
-base_url = "http://127.0.0.1:11434"
-
-[providers.openai-compatible]
-model = "gpt-4.1-mini"
-base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
 ```
 
 Use `--approve` only after reviewing the destination disclosure for a provider that may

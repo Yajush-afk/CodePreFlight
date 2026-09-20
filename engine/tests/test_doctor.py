@@ -11,6 +11,9 @@ def test_doctor_reports_runtime_protocol_tools_and_config(git_repository: Path) 
     assert report["tools"]["git"]["available"] is True
     assert report["tools"]["node"]["minimum"] == "22.0"
     assert report["configuration"]["repository"]["path"].endswith(".codepreflight.toml")
+    assert report["configuration"]["personal"]["path"].endswith(
+        ".git/codepreflight/preferences.toml"
+    )
     assert isinstance(report["providers"], list)
     assert report["privacy"]["telemetry"] is False
     assert report["privacy"]["logContainsRepositoryContent"] is False
