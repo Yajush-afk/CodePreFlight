@@ -26,7 +26,7 @@ class GitGraphBuilder:
         lanes = [{"id": "base" if base == current else "current", "label": current}]
         if dual:
             lanes = [{"id": "base", "label": base}, {"id": "current", "label": current}]
-        commits = self._commits(git, head, base_oid, dual, lanes[0]["id"])
+        commits = self._commits(git, head, base_oid, merge, dual, lanes[0]["id"])
         if merge and not any(item["oid"] == merge for item in commits):
             parents, subject = (
                 git.run("show", "-s", "--format=%P%x00%s", merge).stdout.strip().split("\0", 1)
@@ -39,6 +39,7 @@ class GitGraphBuilder:
             "commits": commits,
             "mergeBase": merge or None,
             "head": head or None,
+            "baseHead": base_oid or None,
             "base": base,
             "current": current,
             "upstream": snapshot.upstream,
@@ -69,21 +70,38 @@ class GitGraphBuilder:
         return result.stdout.strip() if result.returncode == 0 else ""
 
     def _commits(
-        self, git: GitRunner, head: str, base: str, dual: bool, lane: str
+        self, git: GitRunner, head: str, base: str, merge: str, dual: bool, lane: str
     ) -> list[dict[str, Any]]:
         if not head:
             return []
-        arguments = ["log", "--topo-order", "--max-count=20", "--format=%m%x00%H%x00%P%x00%s"]
-        arguments.extend(["--left-right", "--boundary", f"{base}...{head}"] if dual else [head])
+        current_only: set[str] = set()
+        base_only: set[str] = set()
+        arguments = ["log", "--topo-order", "--max-count=24", "--format=%H%x00%P%x00%s"]
+        if dual:
+            current_only = set(
+                git.run("rev-list", "--max-count=48", f"{merge}..{head}", "--").stdout.splitlines()
+            )
+            base_only = set(
+                git.run("rev-list", "--max-count=48", f"{merge}..{base}", "--").stdout.splitlines()
+            )
+            arguments.extend([head, base])
+        else:
+            arguments.append(head)
         output = git.run(*arguments, "--").stdout
         commits = []
         for line in output.splitlines():
-            parts = line.split("\0", 3)
-            if len(parts) != 4:
+            parts = line.split("\0", 2)
+            if len(parts) != 3:
                 continue
-            marker, oid, parents, subject = parts
+            oid, parents, subject = parts
             assigned = (
-                {"<": "base", ">": "current", "-": "shared"}.get(marker, lane) if dual else lane
+                "current"
+                if oid in current_only
+                else "base"
+                if oid in base_only
+                else "shared"
+                if dual
+                else lane
             )
             commits.append(
                 {"oid": oid, "parents": parents.split(), "subject": subject, "lane": assigned}
