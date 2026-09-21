@@ -27,7 +27,7 @@ it("shows the display-only panel on wide terminals and summary on narrow ones", 
       terminalWidth={120}
     />,
   );
-  expect(wide.lastFrame()).toContain("Local commit graph");
+  expect(wide.lastFrame()).toContain("Local history");
   expect(wide.lastFrame()).toContain("Display only");
   wide.unmount();
   const narrow = render(
