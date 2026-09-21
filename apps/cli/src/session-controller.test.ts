@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { EngineRequestError } from "./engine-client.js";
+import {
+  EngineRequestError,
+  type EngineRequestOptions,
+} from "./engine-client.js";
 import type { EngineCommand, EngineEvent } from "./protocol.js";
 import { SessionController, type SessionEngine } from "./session-controller.js";
 
@@ -35,6 +38,7 @@ class FakeEngine implements SessionEngine {
     command: EngineCommand;
     payload: Record<string, unknown>;
   }> = [];
+  requestOptions: EngineRequestOptions[] = [];
   reviewApproved = false;
   automationMode = "manual";
 
@@ -43,8 +47,10 @@ class FakeEngine implements SessionEngine {
     _repositoryPath: string,
     payload: Record<string, unknown> = {},
     onEvent?: (event: EngineEvent) => void,
+    options?: EngineRequestOptions,
   ): Promise<Record<string, unknown>> {
     this.requests.push({ command, payload });
+    if (options) this.requestOptions.push(options);
     if (command === "status") {
       return {
         repository: snapshot,
@@ -182,6 +188,30 @@ class FakeEngine implements SessionEngine {
           true,
         );
       }
+      onEvent?.({
+        protocolVersion: 3,
+        requestId: "scan",
+        event: "scan_progress",
+        payload: {
+          stage: "review",
+          status: "started",
+          batch: 2,
+          batches: 4,
+          completedBatches: 1,
+          sources: ["engine/src/review.py", "engine/tests/test_review.py"],
+          characters: 18000,
+        },
+      });
+      onEvent?.({
+        protocolVersion: 3,
+        requestId: "scan",
+        event: "progress",
+        payload: {
+          kind: "provider_heartbeat",
+          actor: "Provider",
+          elapsedMs: 72000,
+        },
+      });
       return {
         status: "completed",
         summary: "Full scan complete.",
@@ -517,6 +547,10 @@ describe("SessionController", () => {
       repositoryPath: "/repo",
       engine,
     });
+    const activities: string[] = [];
+    controller.subscribe((state) => {
+      if (state.activity) activities.push(state.activity);
+    });
     await controller.start();
 
     await controller.submit("/scanfull");
@@ -532,6 +566,16 @@ describe("SessionController", () => {
       command: "scan",
       payload: { fullScanApproved: true },
     });
+    expect(engine.requestOptions.at(-1)).toMatchObject({
+      timeoutMs: null,
+      idleTimeoutMs: 240000,
+    });
+    expect(activities).toContainEqual(
+      expect.stringContaining("Codex CLI is reviewing batch 2 of 4"),
+    );
+    expect(activities).toContainEqual(
+      expect.stringContaining("batch 2 of 4 · 1m 12s elapsed"),
+    );
     expect(controller.state.transcript.at(-1)?.body).toContain(
       "Full scan complete.",
     );

@@ -10,15 +10,23 @@ from codepreflight_engine.errors import CodePreflightError
 from codepreflight_engine.models import ProviderDescriptor
 
 
-def _post(url: str, *, json: dict[str, Any], headers: dict[str, str] | None = None) -> Any:
+def _post(
+    url: str,
+    *,
+    json: dict[str, Any],
+    headers: dict[str, str] | None = None,
+    timeout: int = 180,
+) -> Any:
     try:
         with operation("Provider", "review", approval="approved"):
-            response = httpx.post(url, json=json, headers=headers, timeout=180)
+            response = httpx.post(url, json=json, headers=headers, timeout=timeout)
             response.raise_for_status()
             return response.json()
     except httpx.TimeoutException as error:
         raise CodePreflightError(
-            "provider_timeout", "Provider request timed out", recoverable=True
+            "provider_timeout",
+            f"Provider timed out after {timeout} seconds",
+            recoverable=True,
         ) from error
     except httpx.HTTPStatusError as error:
         status = error.response.status_code
@@ -46,10 +54,12 @@ class OllamaAdapter:
         *,
         model: str = "qwen2.5-coder:7b",
         base_url: str = "http://127.0.0.1:11434",
+        timeout: int = 180,
     ) -> None:
         self.descriptor = descriptor
         self.model = model
         self.base_url = base_url
+        self.timeout = timeout
 
     def review(self, prompt: str, schema: dict[str, object]) -> str:
         value = _post(
@@ -60,6 +70,7 @@ class OllamaAdapter:
                 "stream": False,
                 "format": schema,
             },
+            timeout=self.timeout,
         )
         response_text = value.get("response") if isinstance(value, dict) else None
         if isinstance(response_text, str):
@@ -75,11 +86,13 @@ class OpenAICompatibleAdapter:
         model: str,
         base_url: str,
         api_key_env: str = "OPENAI_API_KEY",
+        timeout: int = 180,
     ) -> None:
         self.descriptor = descriptor
         self.model = model
         self.base_url = base_url
         self.api_key_env = api_key_env
+        self.timeout = timeout
 
     def review(self, prompt: str, schema: dict[str, object]) -> str:
         api_key = os.environ.get(self.api_key_env)
@@ -102,6 +115,7 @@ class OpenAICompatibleAdapter:
                     },
                 },
             },
+            timeout=self.timeout,
         )
         try:
             return str(value["choices"][0]["message"]["content"])

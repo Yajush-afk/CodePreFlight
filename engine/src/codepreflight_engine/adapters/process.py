@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
-from codepreflight_engine.activity import operation
+from codepreflight_engine.activity import operation, publish
 from codepreflight_engine.errors import CodePreflightError
 
 ALLOWED_ENVIRONMENT = {
@@ -51,20 +52,27 @@ def run_provider_process(
     *,
     prompt: str,
     cwd: Path,
-    timeout: int,
+    timeout: float,
     environment: dict[str, str] | None = None,
+    heartbeat_interval: float = 5.0,
 ) -> subprocess.CompletedProcess[str]:
     try:
         with operation("Provider", "review", command, approval="approved") as record:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=cwd,
-                input=prompt,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                check=False,
-                timeout=timeout,
                 env=environment or sanitized_environment(),
+            )
+            result = _communicate_with_heartbeats(
+                process,
+                command,
+                prompt,
+                timeout=timeout,
+                heartbeat_interval=heartbeat_interval,
             )
             record["exitCode"] = result.returncode
     except subprocess.TimeoutExpired as error:
@@ -86,6 +94,47 @@ def run_provider_process(
             code = "provider_error"
         raise CodePreflightError(code, detail[-2000:], recoverable=True)
     return result
+
+
+def _communicate_with_heartbeats(
+    process: subprocess.Popen[str],
+    command: list[str],
+    prompt: str,
+    *,
+    timeout: float,
+    heartbeat_interval: float,
+) -> subprocess.CompletedProcess[str]:
+    started = time.monotonic()
+    pending_input: str | None = prompt
+    while True:
+        elapsed = time.monotonic() - started
+        remaining = timeout - elapsed
+        if remaining <= 0:
+            process.kill()
+            process.communicate()
+            raise subprocess.TimeoutExpired(command, timeout)
+        try:
+            stdout, stderr = process.communicate(
+                input=pending_input,
+                timeout=min(max(heartbeat_interval, 0.01), remaining),
+            )
+            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired as error:
+            pending_input = None
+            elapsed = time.monotonic() - started
+            if elapsed >= timeout:
+                process.kill()
+                process.communicate()
+                raise subprocess.TimeoutExpired(command, timeout) from error
+            publish(
+                "progress",
+                {
+                    "kind": "provider_heartbeat",
+                    "actor": "Provider",
+                    "elapsedMs": round(elapsed * 1000),
+                    "message": "Provider process is still running",
+                },
+            )
 
 
 def extract_json_event_text(output: str) -> str:

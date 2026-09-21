@@ -137,6 +137,7 @@ def test_full_scan_batches_filters_caches_and_resumes(
         {"provider": "fake", "action": "plan", "batchCharacters": 120},
         lambda *args: None,
     )
+    events: list[tuple[str, dict[str, object]]] = []
 
     first = FullScanOrchestrator().scan(
         git_repository,
@@ -146,7 +147,7 @@ def test_full_scan_batches_filters_caches_and_resumes(
             "batchCharacters": 120,
             "planFingerprint": preview["planFingerprint"],
         },
-        lambda event, payload: None,
+        lambda event, payload: events.append((event, payload)),
     )
     calls = len(adapter.requests)
     second = FullScanOrchestrator().scan(
@@ -168,6 +169,14 @@ def test_full_scan_batches_filters_caches_and_resumes(
     assert excluded["generated.min.js"] == "generated file"
     assert excluded["image.png"] == "binary file"
     assert first["manifest"]["providerRequests"] > 1
+    review_events = [
+        payload
+        for event, payload in events
+        if event == "scan_progress" and payload.get("stage") == "review"
+    ]
+    assert review_events[0]["status"] == "started"
+    assert review_events[0]["sources"]
+    assert review_events[-1]["completedBatches"] == first["manifest"]["batches"]
     assert second["cacheHit"] is True
     assert len(adapter.requests) == calls
 

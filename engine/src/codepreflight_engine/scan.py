@@ -490,7 +490,25 @@ class ScanExecutor(_ScanTools):
             return {**cached, "cacheHit": True}
 
         publish("workflow_stage", {"stage": "checks", "actor": "Check"})
+        emit(
+            "scan_progress",
+            {
+                "stage": "checks",
+                "status": "started",
+                "completedBatches": 0,
+                "message": "Running approved deterministic checks",
+            },
+        )
         checks = CheckRunner().run(root, planned_checks)
+        emit(
+            "scan_progress",
+            {
+                "stage": "checks",
+                "status": "completed",
+                "completedBatches": 0,
+                "message": f"Completed {len(checks)} deterministic check(s)",
+            },
+        )
         self._assert_repository_unchanged(plan)
         check_digest = hashlib.sha256(
             json.dumps(
@@ -503,18 +521,36 @@ class ScanExecutor(_ScanTools):
         drafts = []
         reused = 0
         for index, batch in enumerate(batches):
+            progress = {
+                "stage": "review",
+                "batch": index + 1,
+                "batches": len(batches),
+                "sources": self._batch_sources(manifest, index),
+                "characters": len(batch),
+                "completedBatches": index,
+                "resumedBatches": reused,
+            }
             batch_hash = hashlib.sha256(batch.encode()).hexdigest()
             batch_path = cache / "batches" / check_digest / f"{index:04d}-{batch_hash}.json"
             parsed = self._read_json(batch_path)
             if parsed:
                 reused += 1
+                emit(
+                    "scan_progress",
+                    {
+                        **progress,
+                        "status": "cached",
+                        "completedBatches": index + 1,
+                        "resumedBatches": reused,
+                        "message": f"Reused cached batch {index + 1} of {len(batches)}",
+                    },
+                )
             else:
                 emit(
                     "scan_progress",
                     {
-                        "stage": "review",
-                        "batch": index + 1,
-                        "batches": len(batches),
+                        **progress,
+                        "status": "started",
                         "message": f"Reviewing batch {index + 1} of {len(batches)}",
                     },
                 )
@@ -528,10 +564,28 @@ class ScanExecutor(_ScanTools):
                     response = parse_provider_response(repaired)
                 parsed = response.model_dump(mode="json")
                 self._atomic_json(batch_path, parsed)
+                emit(
+                    "scan_progress",
+                    {
+                        **progress,
+                        "status": "completed",
+                        "completedBatches": index + 1,
+                        "message": f"Completed batch {index + 1} of {len(batches)}",
+                    },
+                )
             response = parse_provider_response(json.dumps(parsed))
             drafts.extend(response.findings)
 
-        emit("scan_progress", {"stage": "verification", "message": "Verifying evidence"})
+        emit(
+            "scan_progress",
+            {
+                "stage": "verification",
+                "status": "started",
+                "batches": len(batches),
+                "completedBatches": len(batches),
+                "message": "Verifying evidence",
+            },
+        )
         self._assert_repository_unchanged(plan)
         findings, rejected = FindingVerifier().verify(root, drafts, target="full")
         for finding in findings:
@@ -541,7 +595,16 @@ class ScanExecutor(_ScanTools):
             "verifiedFindings": [finding.model_dump(mode="json") for finding in findings],
             "rejectedFindings": rejected,
         }
-        emit("scan_progress", {"stage": "synthesis", "message": "Synthesizing verified results"})
+        emit(
+            "scan_progress",
+            {
+                "stage": "synthesis",
+                "status": "started",
+                "batches": len(batches),
+                "completedBatches": len(batches),
+                "message": "Synthesizing verified results",
+            },
+        )
         synthesis_raw = adapter.review(
             self._synthesis_prompt(synthesis_payload), provider_output_schema()
         )
@@ -571,6 +634,13 @@ class ScanExecutor(_ScanTools):
         }
         self._atomic_json(final_path, result)
         return result
+
+    def _batch_sources(self, manifest: dict[str, Any], index: int) -> list[str]:
+        batches = manifest.get("batchManifest", [])
+        if not isinstance(batches, list) or index >= len(batches):
+            return []
+        sources = batches[index].get("sources", [])
+        return [str(item[0]) for item in sources if isinstance(item, (list, tuple)) and item]
 
 
 class FullScanOrchestrator:
