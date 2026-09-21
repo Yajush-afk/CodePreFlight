@@ -10,9 +10,11 @@ import {
   type EngineEvent,
   type EngineRequest,
 } from "./protocol.js";
+import { RequestActivityTracker } from "./request-activity.js";
 
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 5 * 60_000;
+export const FULL_SCAN_IDLE_TIMEOUT_MS = 4 * 60_000;
 const MAX_DIAGNOSTIC_CHARACTERS = 12_000;
 
 function repositoryRoot(): string {
@@ -28,7 +30,8 @@ export interface EngineClientOptions {
 
 export interface EngineRequestOptions {
   signal?: AbortSignal;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
+  idleTimeoutMs?: number;
 }
 
 export class EngineRequestError extends Error {
@@ -47,7 +50,10 @@ interface PendingRequest {
   resolve: (value: Record<string, unknown>) => void;
   reject: (error: Error) => void;
   onEvent?: (event: EngineEvent) => void;
-  timeout: NodeJS.Timeout;
+  timeout?: NodeJS.Timeout;
+  idleTimeout?: NodeJS.Timeout;
+  idleTimeoutMs?: number;
+  activity: RequestActivityTracker;
   removeAbortListener?: () => void;
 }
 
@@ -182,22 +188,30 @@ class EngineConnection {
       );
     }
     return await new Promise((resolveRequest, rejectRequest) => {
-      const duration = options.timeoutMs ?? this.requestTimeoutMs;
-      const timeout = setTimeout(() => {
-        const error = new EngineRequestError(
-          `Engine request timed out after ${duration} ms`,
-          "engine_request_timeout",
-          true,
-        );
-        rejectRequest(error);
-        this.terminate(error);
-      }, duration);
+      const duration =
+        options.timeoutMs === undefined
+          ? this.requestTimeoutMs
+          : options.timeoutMs;
       const pending: PendingRequest = {
         resolve: resolveRequest,
         reject: rejectRequest,
         onEvent,
-        timeout,
+        idleTimeoutMs: options.idleTimeoutMs,
+        activity: new RequestActivityTracker(request.command),
       };
+      if (duration !== null) {
+        pending.timeout = setTimeout(() => {
+          const cause = `Engine request timed out after ${duration} ms`;
+          const error = new EngineRequestError(
+            pending.activity.describeFailure(cause),
+            "engine_request_timeout",
+            true,
+            pending.activity.failureDetails(),
+          );
+          rejectRequest(error);
+          this.terminate(error);
+        }, duration);
+      }
       if (options.signal) {
         const cancel = (): void => {
           const error = new EngineRequestError(
@@ -213,6 +227,7 @@ class EngineConnection {
           options.signal?.removeEventListener("abort", cancel);
       }
       this.pending.set(request.requestId, pending);
+      this.armIdleWatchdog(request.requestId, pending);
       this.child.stdin.write(`${JSON.stringify(request)}\n`);
       if (!this.keepAlive) this.child.stdin.end();
     });
@@ -231,15 +246,22 @@ class EngineConnection {
   private handleEvent(event: EngineEvent): void {
     const pending = this.pending.get(event.requestId);
     if (!pending) return;
+    pending.activity.record(event);
+    this.armIdleWatchdog(event.requestId, pending);
     pending.onEvent?.(event);
     if (event.event === "error") {
       this.finish(event.requestId);
       pending.reject(
         new EngineRequestError(
-          event.error?.message ?? "Engine request failed",
+          pending.activity.describeFailure(
+            event.error?.message ?? "Engine request failed",
+          ),
           event.error?.code,
           event.error?.recoverable,
-          event.error?.details,
+          {
+            ...event.error?.details,
+            ...pending.activity.failureDetails(),
+          },
         ),
       );
     } else if (event.event === "complete") {
@@ -251,9 +273,27 @@ class EngineConnection {
   private finish(requestId: string): void {
     const pending = this.pending.get(requestId);
     if (!pending) return;
-    clearTimeout(pending.timeout);
+    if (pending.timeout) clearTimeout(pending.timeout);
+    if (pending.idleTimeout) clearTimeout(pending.idleTimeout);
     pending.removeAbortListener?.();
     this.pending.delete(requestId);
+  }
+
+  private armIdleWatchdog(requestId: string, pending: PendingRequest): void {
+    if (!pending.idleTimeoutMs) return;
+    if (pending.idleTimeout) clearTimeout(pending.idleTimeout);
+    pending.idleTimeout = setTimeout(() => {
+      const cause = `No engine progress or provider heartbeat was received for ${pending.idleTimeoutMs} ms`;
+      const error = new EngineRequestError(
+        pending.activity.describeFailure(cause),
+        "engine_request_idle_timeout",
+        true,
+        pending.activity.failureDetails(),
+      );
+      pending.reject(error);
+      this.finish(requestId);
+      this.terminate(error);
+    }, pending.idleTimeoutMs);
   }
 
   private fail(error: Error): void {

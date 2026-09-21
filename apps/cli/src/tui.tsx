@@ -224,14 +224,7 @@ export function SessionView({
         </Text>
       )}
       {state.activity && (
-        <WorkingIndicator
-          label={
-            state.activeActor === "Provider"
-              ? `${header?.provider ?? "Reviewer"} is reviewing…`
-              : state.activity
-          }
-          animate={animate}
-        />
+        <WorkingIndicator label={state.activity} animate={animate} />
       )}
       {state.interruptionNotice && (
         <Text color={colorEnabled ? "yellow" : undefined}>

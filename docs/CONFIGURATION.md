@@ -35,3 +35,14 @@ use requires explicit repository trust. `preflight init --trust` records that ap
 
 No scope stores credentials. Subscription CLI authentication remains with the provider CLI, and
 API providers refer only to environment-variable names.
+
+Provider calls default to a 180-second timeout. Override it per provider when a local model or
+subscription CLI needs more time:
+
+```toml
+[providers.codex]
+timeout_seconds = 600
+```
+
+The allowed range is 1 to 1800 seconds. This controls each provider invocation, not the total
+duration of `/scanfull`.

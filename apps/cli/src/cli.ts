@@ -6,7 +6,11 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import React from "react";
 import { render } from "ink";
-import { EngineClient, EngineRequestError } from "./engine-client.js";
+import {
+  EngineClient,
+  EngineRequestError,
+  FULL_SCAN_IDLE_TIMEOUT_MS,
+} from "./engine-client.js";
 import {
   printExplanation,
   printPanel,
@@ -144,6 +148,7 @@ scan
               );
             }
           },
+          { timeoutMs: null, idleTimeoutMs: FULL_SCAN_IDLE_TIMEOUT_MS },
         );
         if (options.json) printValue(result, true);
         else printReview(result);

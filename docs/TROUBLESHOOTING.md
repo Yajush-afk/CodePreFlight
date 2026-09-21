@@ -19,6 +19,12 @@ Start with `preflight doctor` and `preflight providers`.
   No automatic fetch occurs.
 - `scan_plan_stale`: repository, provider, configuration, or check side effects changed the
   preview. Run `/scanfull` again and inspect the new manifest. Old approval is not reused.
+- `engine_request_idle_timeout`: no engine progress or provider heartbeat arrived for four
+  minutes. The error reports the active scan stage, batch, locally cached completed batches, and
+  last observed provider activity. Retry after checking the provider CLI; matching partial batch
+  results can resume from the local scan cache.
+- `provider_timeout`: one provider invocation exceeded its configured `timeout_seconds`. This is
+  separate from the scan inactivity watchdog and from total scan duration.
 - `staged_changes_changed`: the index changed during or after review. Review again before committing.
 - Missing invocation evidence: use `/providertest`, or complete an ordinary manual review.
   Repeating login is not a substitute for testing the adapter.

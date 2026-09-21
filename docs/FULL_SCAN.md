@@ -21,3 +21,13 @@ PgUp/PgDn lets you inspect long manifests. Files with single lines too large for
 batch budget are explicitly excluded rather than silently overflowing it. Check execution
 is followed by a repository-state validation before transmission, and state is checked again
 before evidence verification. Changed check results cannot reuse old partial batch results.
+
+Full scans do not inherit the ordinary five-minute engine-request deadline. Each provider call
+still uses its configured `timeout_seconds`. While a subscription CLI is running, CodePreFlight
+emits a content-free heartbeat every five seconds. The terminal applies a four-minute inactivity
+watchdog that resets on real engine progress or a provider heartbeat; it is not an overall scan
+duration limit. Escape cancellation still terminates the engine process group.
+
+Progress text comes from actual scan stages, batch numbers, selected source paths, cache reuse,
+and evidence verification. Supporting copy is deterministic and consumes no provider tokens.
+CodePreFlight does not present invented model thoughts or hidden provider tool activity.

@@ -58,3 +58,21 @@ def test_provider_smoke_test_uses_only_synthetic_content(monkeypatch) -> None:
     }
     assert "synthetic" in fake.requests[0][0].lower()
     assert "repository" not in fake.requests[0][0].lower()
+
+
+def test_provider_timeout_configuration_reaches_cli_and_http_adapters() -> None:
+    registry = ProviderRegistry.__new__(ProviderRegistry)
+    registry.config = {
+        "providers": {
+            "codex": {"timeout_seconds": 17},
+            "ollama": {"timeout_seconds": 23},
+        }
+    }
+    descriptor = FakeProviderAdapter("{}").descriptor
+    registry.descriptors = {
+        "codex": descriptor.model_copy(update={"id": "codex"}),
+        "ollama": descriptor.model_copy(update={"id": "ollama"}),
+    }
+
+    assert registry.adapter("codex").timeout == 17  # type: ignore[attr-defined]
+    assert registry.adapter("ollama").timeout == 23  # type: ignore[attr-defined]

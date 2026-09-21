@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import {
   EngineClient,
   EngineRequestError,
+  FULL_SCAN_IDLE_TIMEOUT_MS,
   type EngineRequestOptions,
 } from "./engine-client.js";
 import type { EngineCommand, EngineEvent } from "./protocol.js";
@@ -12,6 +13,10 @@ import { OnboardingCoordinator } from "./onboarding-coordinator.js";
 import { WorkflowCoordinator } from "./workflow-coordinator.js";
 import { GitGraphPresenter, type GitGraph } from "./git-graph-presenter.js";
 import { WorkspacePresenter } from "./workspace-presenter.js";
+import {
+  ScanActivityPresenter,
+  type ScanProgressView,
+} from "./scan-activity-presenter.js";
 
 export interface SessionEngine {
   request(
@@ -198,6 +203,7 @@ export class SessionController {
     redactions: number;
   };
   private fullScanManifest?: Record<string, unknown>;
+  private scanProgress?: ScanProgressView;
   private pollTimer?: NodeJS.Timeout;
   private polling = false;
   private disposed = false;
@@ -329,6 +335,7 @@ export class SessionController {
       this.retries.clear();
       this.consentDecisions.clear();
       this.activityStore.cancel();
+      this.scanProgress = undefined;
       this.patch({
         busy: false,
         activity: undefined,
@@ -377,6 +384,7 @@ export class SessionController {
     this.suggestions.clear();
     this.lastReview = undefined;
     this.fullScanManifest = undefined;
+    this.scanProgress = undefined;
     this.disclosure = undefined;
     this.seenJobs.clear();
     this.listeners.clear();
@@ -1335,8 +1343,10 @@ export class SessionController {
       });
       return;
     }
-    if (approved)
+    if (approved) {
+      this.scanProgress = undefined;
       this.setPipeline(["checks", "review", "verify", "summary"], 0);
+    }
     await this.runBusy("Preparing guarded full scan…", async () => {
       if (!approved) this.fullScanManifest = undefined;
       const request = this.beginRequest();
@@ -1354,7 +1364,11 @@ export class SessionController {
                 : undefined,
             },
             (event) => this.handleEngineEvent(event),
-            { signal: request.signal },
+            {
+              signal: request.signal,
+              timeoutMs: null,
+              idleTimeoutMs: FULL_SCAN_IDLE_TIMEOUT_MS,
+            },
           );
           this.lastReview = result as ReviewView;
           this.appendReview(this.lastReview);
@@ -1739,16 +1753,37 @@ export class SessionController {
       this.patch({ activeActor: String(event.payload?.actor ?? "Preflight") });
       return;
     }
-    if (event.event === "progress") {
-      const message = String(event.payload?.message ?? "Working…");
-      this.patch({ activity: message });
-    }
-    if (event.event === "scan_progress") {
-      this.patch({ activity: String(event.payload?.message ?? "Scanning…") });
-      const stage = String(event.payload?.stage ?? "");
-      this.advancePipeline(stage === "verification" ? "verify" : stage);
-    }
+    if (event.event === "progress") this.handleProgressEvent(event);
+    if (event.event === "scan_progress") this.handleScanProgressEvent(event);
     if (event.event === "consent_required") this.handleConsentEvent(event);
+  }
+
+  private handleProgressEvent(event: EngineEvent): void {
+    const message =
+      event.payload?.kind === "provider_heartbeat"
+        ? new ScanActivityPresenter().heartbeat(
+            this.scanProgress,
+            this.currentState.header?.provider ?? "Reviewer",
+            Number(event.payload?.elapsedMs ?? 0),
+          )
+        : String(event.payload?.message ?? "Working…");
+    this.patch({ activity: message });
+  }
+
+  private handleScanProgressEvent(event: EngineEvent): void {
+    this.scanProgress = event.payload as ScanProgressView;
+    this.patch({
+      activity: new ScanActivityPresenter().progress(
+        this.scanProgress,
+        this.currentState.header?.provider ?? "Reviewer",
+      ),
+    });
+    const stages: Record<string, string> = {
+      verification: "verify",
+      synthesis: "summary",
+    };
+    const stage = String(event.payload?.stage ?? "");
+    this.advancePipeline(stages[stage] ?? stage);
   }
 
   private handleOperationEvent(event: EngineEvent): void {
@@ -1758,8 +1793,10 @@ export class SessionController {
       this.patch({
         activeActor: record.status === "running" ? record.actor : "Preflight",
         activity:
-          record.summary ??
-          `${record.actor} ${record.status === "running" ? "is running" : record.status} ${record.category}`,
+          record.actor === "Provider" && this.scanProgress
+            ? this.currentState.activity
+            : (record.summary ??
+              `${record.actor} ${record.status === "running" ? "is running" : record.status} ${record.category}`),
       });
   }
 

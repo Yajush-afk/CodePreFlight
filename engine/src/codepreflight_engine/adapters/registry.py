@@ -37,6 +37,7 @@ class ProviderRegistry:
                 descriptor,
                 model=str(provider_config.get("model", "qwen2.5-coder:7b")),
                 base_url=str(provider_config.get("base_url", "http://127.0.0.1:11434")),
+                timeout=timeout,
             )
         if provider_id == "codex":
             return CodexCliAdapter(
@@ -71,6 +72,7 @@ class ProviderRegistry:
                 model=str(provider_config.get("model", "gpt-4.1-mini")),
                 base_url=str(provider_config.get("base_url", "https://api.openai.com/v1")),
                 api_key_env=api_key_env,
+                timeout=timeout,
             )
         raise CodePreflightError("unsupported_provider", f"Unsupported provider: {provider_id}")
 
