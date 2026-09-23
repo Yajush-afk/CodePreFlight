@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import TextInput from "ink-text-input";
 import SelectInput from "ink-select-input";
-import { useWorkspaceInput } from "./workspace-input.js";
+import { sanitizeComposerInput, useWorkspaceInput } from "./workspace-input.js";
 import {
   useWorkspaceSession,
   useWorkspaceDimensions,
@@ -45,6 +45,7 @@ interface SessionViewProps {
   animate?: boolean;
   scrollOffset?: number;
   now?: number;
+  composerKey?: number;
 }
 
 const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
@@ -72,6 +73,7 @@ export function SessionView({
   animate = false,
   scrollOffset = 0,
   now = Date.now(),
+  composerKey = 0,
 }: SessionViewProps): React.JSX.Element {
   if (terminalHandoff) return <></>;
   const header = state.header;
@@ -284,6 +286,7 @@ export function SessionView({
       <Box borderStyle="single" borderColor={accent} paddingX={1}>
         <Text color={accent}>› </Text>
         <TextInput
+          key={composerKey}
           value={input}
           onChange={onInput}
           onSubmit={onSubmit}
@@ -310,6 +313,7 @@ export function App(options: AppProps): React.JSX.Element {
   const { controller, state, terminalHandoff, exit } =
     useWorkspaceSession(options);
   const [input, setInput] = useState("");
+  const [composerRevision, setComposerRevision] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const palette = useCommandSuggestions(input, controller);
   const dimensions = useWorkspaceDimensions();
@@ -318,6 +322,10 @@ export function App(options: AppProps): React.JSX.Element {
     () => setScrollOffset(0),
     [state.overlay?.title, state.pendingDecision?.id],
   );
+  const replaceInput = (value: string): void => {
+    setInput(value);
+    setComposerRevision((revision) => revision + 1);
+  };
   useWorkspaceInput({
     controller,
     state,
@@ -325,6 +333,7 @@ export function App(options: AppProps): React.JSX.Element {
     terminalHandoff,
     exit,
     setInput,
+    replaceInput,
     setScrollOffset,
     ...palette,
   });
@@ -335,7 +344,7 @@ export function App(options: AppProps): React.JSX.Element {
     if (!state.overlay && choice) {
       if (choice.disabled) return;
       if (choice.argument) {
-        setInput(choice.completion);
+        replaceInput(choice.completion);
         return;
       }
       value = choice.completion;
@@ -350,7 +359,7 @@ export function App(options: AppProps): React.JSX.Element {
       input={input}
       onInput={(value) => {
         palette.setSuggestionsDismissed(false);
-        setInput(value);
+        setInput(sanitizeComposerInput(value));
       }}
       onSubmit={submit}
       onSelect={(action) => {
@@ -370,6 +379,7 @@ export function App(options: AppProps): React.JSX.Element {
       }
       scrollOffset={scrollOffset}
       now={now}
+      composerKey={composerRevision}
     />
   );
 }

@@ -18,6 +18,7 @@ import { WorkflowCoordinator } from "./workflow-coordinator.js";
 import { GitGraphPresenter, type GitGraph } from "./git-graph-presenter.js";
 import { WorkspacePresenter } from "./workspace-presenter.js";
 import { FindingsPresenter, type FindingView } from "./findings-presenter.js";
+import { sanitizeComposerInput } from "./composer-input.js";
 import {
   ScanActivityPresenter,
   type ScanProgressView,
@@ -213,6 +214,7 @@ export class SessionController {
     characters: number;
     redactions: number;
   };
+  private disclosureEntryId?: string;
   private fullScanManifest?: Record<string, unknown>;
   private scanProgress?: ScanProgressView;
   private pollTimer?: NodeJS.Timeout;
@@ -287,7 +289,7 @@ export class SessionController {
   }
 
   async submit(input: string): Promise<void> {
-    const value = input.trim();
+    const value = sanitizeComposerInput(input).trim();
     if (value === "/close") {
       this.onboarding.active = false;
       this.patch({ overlay: undefined });
@@ -446,7 +448,7 @@ export class SessionController {
       switchbranch: () => this.previewSwitch(argument),
       pr: () => this.detectPullRequest(),
       review: () => this.openReviewPicker(),
-      findings: () => this.openFindings(argument),
+      findings: () => this.openFindings(argument || "all"),
       reviewstaged: () => this.review("staged"),
       reviewworking: () => this.review("working"),
       reviewbranch: () => this.review("branch"),
@@ -679,6 +681,7 @@ export class SessionController {
   }
 
   private async loadArguments(command: string): Promise<Suggestion[]> {
+    if (command === "findings") return this.findingFilterSuggestions();
     if (command.startsWith("provider")) {
       const providers = this.providers.filter(
         (item) =>
@@ -739,6 +742,31 @@ export class SessionController {
           item.title ?? item.subject ?? item.status ?? item.mergedAt ?? "",
         ),
         completion: `/${command} ${value}`,
+      };
+    });
+  }
+
+  private findingFilterSuggestions(): Suggestion[] {
+    const findings = this.lastReview?.findings ?? [];
+    const filters = [
+      "all",
+      "critical",
+      "warning",
+      "suggestion",
+      "informational",
+    ];
+    return filters.map((filter) => {
+      const count =
+        filter === "all"
+          ? findings.length
+          : findings.filter(
+              (finding) => finding.severity?.toLowerCase() === filter,
+            ).length;
+      return {
+        value: filter,
+        label: filter,
+        context: `${count} ${count === 1 ? "finding" : "findings"}`,
+        completion: `/findings ${filter}`,
       };
     });
   }
@@ -1733,7 +1761,11 @@ export class SessionController {
     this.continueSetup();
   }
 
-  private async review(target: string, revision?: string): Promise<void> {
+  private async review(
+    target: string,
+    revision?: string,
+    consentRetry = false,
+  ): Promise<void> {
     if (
       !this.activeProviderId ||
       (this.activeProvider()?.readiness?.state ??
@@ -1746,7 +1778,8 @@ export class SessionController {
       });
       return;
     }
-    const retry = async (): Promise<void> => this.review(target, revision);
+    const retry = async (): Promise<void> =>
+      this.review(target, revision, true);
     this.setPipeline(
       ["snapshot", "checks", "context", "provider", "verify"],
       0,
@@ -1755,6 +1788,7 @@ export class SessionController {
       `Preparing ${target.replace("_", " ")} review…`,
       async () => {
         this.disclosure = undefined;
+        if (!consentRetry) this.disclosureEntryId = undefined;
         const request = this.beginRequest();
         try {
           const result = await this.engine.request(
@@ -1795,13 +1829,14 @@ export class SessionController {
     );
   }
 
-  private async ask(question: string): Promise<void> {
+  private async ask(question: string, consentRetry = false): Promise<void> {
     this.patch({ pipeline: undefined });
     const payload = this.questionPayload(question);
     if (!payload) return;
-    const retry = async (): Promise<void> => this.ask(question);
+    const retry = async (): Promise<void> => this.ask(question, true);
     await this.runBusy("Gathering repository evidence…", async () => {
       this.disclosure = undefined;
+      if (!consentRetry) this.disclosureEntryId = undefined;
       const request = this.beginRequest();
       try {
         try {
@@ -1998,10 +2033,15 @@ export class SessionController {
       characters: manifest?.total_characters ?? 0,
       redactions: manifest?.redactions ?? 0,
     };
-    this.append({
+    const body = `${this.disclosure.providerName} · ${this.disclosure.destination} · ${this.disclosure.kind} · ${this.disclosure.characters.toLocaleString()} characters · ${this.disclosure.redactions} redactions`;
+    if (this.disclosureEntryId) {
+      this.updateTranscriptEntry(this.disclosureEntryId, body);
+      return;
+    }
+    this.disclosureEntryId = this.append({
       kind: "status",
       title: "Review context",
-      body: `${this.disclosure.providerName} · ${this.disclosure.destination} · ${this.disclosure.kind} · ${this.disclosure.characters.toLocaleString()} characters · ${this.disclosure.redactions} redactions`,
+      body,
     });
   }
 
@@ -2188,6 +2228,8 @@ export class SessionController {
           open_configuration:
             "inspect your private preference, global config, or optional team config",
           approve_transmission: "review the manifest and approve",
+          restart_preflight:
+            "exit with Ctrl+C, rebuild if needed, then relaunch preflight",
         };
         return (
           labels[type] ?? "retry after resolving the reported repository state"
@@ -2200,12 +2242,19 @@ export class SessionController {
     if (this.active === request) this.active = undefined;
   }
 
-  private append(entry: Omit<TranscriptEntry, "id">): void {
+  private append(entry: Omit<TranscriptEntry, "id">): string {
+    const id = this.nextId("entry");
     this.patch({
-      transcript: [
-        ...this.currentState.transcript,
-        { ...entry, id: this.nextId("entry") },
-      ],
+      transcript: [...this.currentState.transcript, { ...entry, id }],
+    });
+    return id;
+  }
+
+  private updateTranscriptEntry(id: string, body: string): void {
+    this.patch({
+      transcript: this.currentState.transcript.map((entry) =>
+        entry.id === id ? { ...entry, body } : entry,
+      ),
     });
   }
 

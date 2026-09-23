@@ -2,6 +2,7 @@ import { useInput, type Key } from "ink";
 import type { Dispatch, SetStateAction } from "react";
 import type { SessionController, SessionState } from "./session-controller.js";
 import type { Suggestion } from "./command-registry.js";
+export { sanitizeComposerInput } from "./composer-input.js";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 export interface WorkspaceInput {
@@ -13,6 +14,7 @@ export interface WorkspaceInput {
   suggestionsLoading: boolean;
   terminalHandoff: boolean;
   setInput: Setter<string>;
+  replaceInput: (value: string) => void;
   setSuggestions: Setter<Suggestion[]>;
   setSuggestionsDismissed: Setter<boolean>;
   setSuggestionIndex: Setter<number>;
@@ -38,7 +40,7 @@ function suggestionKey(context: WorkspaceInput, key: Key): boolean {
     return true;
   }
   if (key.tab) {
-    context.setInput(suggestions[context.suggestionIndex]!.completion);
+    context.replaceInput(suggestions[context.suggestionIndex]!.completion);
     return true;
   }
   return false;
@@ -119,7 +121,7 @@ function historyWorkspace(
     !["p", "n"].includes(value)
   )
     return false;
-  context.setInput(
+  context.replaceInput(
     context.controller.history(value === "p" ? "previous" : "next"),
   );
   return true;

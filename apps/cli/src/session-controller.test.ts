@@ -272,24 +272,24 @@ class FakeEngine implements SessionEngine {
       return { commit: "deadbeef", message: payload.message };
     }
     if (command === "review") {
-      if (!payload.remoteApproved) {
-        onEvent?.({
-          protocolVersion: 3,
-          requestId: "review",
-          event: "consent_required",
-          payload: {
-            provider: {
-              id: "codex",
-              name: "Codex CLI",
-              kind: "subscription_cli",
-            },
-            manifest: {
-              total_characters: 1200,
-              redactions: 0,
-              secret_scanner: "built-in",
-            },
+      onEvent?.({
+        protocolVersion: 3,
+        requestId: "review",
+        event: "consent_required",
+        payload: {
+          provider: {
+            id: "codex",
+            name: "Codex CLI",
+            kind: "subscription_cli",
           },
-        });
+          manifest: {
+            total_characters: 1200,
+            redactions: 0,
+            secret_scanner: "built-in",
+          },
+        },
+      });
+      if (!payload.remoteApproved) {
         throw new EngineRequestError(
           "Approval required",
           "provider_consent_required",
@@ -477,6 +477,28 @@ describe("SessionController", () => {
     expect(engine.reviewApproved).toBe(true);
     expect(controller.state.pendingDecision).toBeUndefined();
     expect(controller.state.transcript.at(-1)?.kind).toBe("review");
+    expect(
+      controller.state.transcript.filter(
+        (entry) => entry.title === "Review context",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("rejects input containing only terminal control characters", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+    const entries = controller.state.transcript.length;
+
+    await controller.submit("\u007f\u0008\u0000");
+
+    expect(controller.state.transcript).toHaveLength(entries);
+    expect(
+      engine.requests.filter((request) => request.command === "explain"),
+    ).toHaveLength(0);
   });
 
   it("routes plain text to repository-scoped questions", async () => {
@@ -579,6 +601,17 @@ describe("SessionController", () => {
         reviewContext: { findings: [{ id: "finding-10" }] },
       },
     });
+
+    await controller.submit("/findings");
+    expect(controller.state.overlay?.title).toContain("Findings · all");
+
+    const suggestions = await controller.suggest("/findings ");
+    expect(suggestions.map((item) => item.value)).toEqual(
+      expect.arrayContaining(["all", "critical", "warning", "suggestion"]),
+    );
+    expect(suggestions.find((item) => item.value === "warning")?.context).toBe(
+      "37 findings",
+    );
   });
 
   it("previews and confirms provider selection", async () => {
