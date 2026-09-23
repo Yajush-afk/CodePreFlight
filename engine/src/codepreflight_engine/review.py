@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -14,8 +15,14 @@ from .config import load_config
 from .context import ContextBuilder
 from .errors import CodePreflightError
 from .git import GitRunner
+from .merged_pull_request import (
+    MergedPullRequestContextBuilder,
+    MergedPullRequestResolver,
+    MergedPullRequestSource,
+)
 from .models import (
     BlastRadiusItem,
+    ContextPackage,
     Finding,
     ProviderKind,
     ReviewFailure,
@@ -48,6 +55,15 @@ DEPTH_FOCUS = {
 }
 
 
+@dataclass(frozen=True)
+class ReviewScope:
+    target: str
+    revision: str | None = None
+    base_revision: str | None = None
+    comparison_note: str | None = None
+    historical: MergedPullRequestSource | None = None
+
+
 class ReviewOrchestrator:
     def review_staged(
         self,
@@ -76,28 +92,13 @@ class ReviewOrchestrator:
                 "This repository configuration contains executable checks; "
                 "run `preflight init --team --write` or approve it before review",
             )
-        target = str(payload.get("target", "staged"))
-        if target not in {"staged", "commit", "branch", "pull_request"}:
-            raise CodePreflightError("unsupported_target", f"Unsupported review target: {target}")
-        revision: str | None = None
-        base_revision: str | None = None
-        comparison_note: str | None = None
-        if target == "commit":
-            revision, base_revision, comparison_note = self._commit_revisions(root, payload)
-        else:
-            base_revision = (
-                self._base_revision(root, payload, config) if target != "staged" else None
-            )
-        emit("progress", {"message": f"Building focused {target.replace('_', ' ')} context"})
-        emit("workflow_stage", {"stage": "context", "actor": "Preflight"})
-        context = ContextBuilder().build(
-            root,
-            config,
-            target=cast(Literal["staged", "commit", "branch", "pull_request"], target),
-            base_revision=base_revision,
-            revision=revision,
-            comparison_note=comparison_note,
+        scope = self._resolve_scope(root, payload, config)
+        emit(
+            "progress",
+            {"message": f"Building focused {scope.target.replace('_', ' ')} context"},
         )
+        emit("workflow_stage", {"stage": "context", "actor": "Preflight"})
+        context = self._build_context(root, config, scope)
         if provider.kind == ProviderKind.SUBSCRIPTION_CLI and not is_trusted(root):
             raise CodePreflightError(
                 "repository_not_trusted",
@@ -105,15 +106,17 @@ class ReviewOrchestrator:
                 f"invoking {provider.name}",
                 recoverable=True,
             )
-        blast_radius = BlastRadiusAnalyzer().analyze(root, context.changed_files)
-        depth = str(payload.get("depth") or self._default_depth(target))
+        blast_radius = (
+            [] if scope.historical else BlastRadiusAnalyzer().analyze(root, context.changed_files)
+        )
+        depth = str(payload.get("depth") or self._default_depth(scope.target))
         self._validate_depth(depth)
         fingerprint = self._fingerprint(
             context.content,
             provider.model_dump(mode="json"),
             config,
-            target,
-            base_revision,
+            scope.target,
+            scope.base_revision,
             blast_radius,
         )
         cache = ReviewCache(root)
@@ -148,9 +151,11 @@ class ReviewOrchestrator:
         findings, rejected = FindingVerifier().verify(
             root,
             response.findings,
-            target=target,
-            base_revision=base_revision,
-            revision=revision,
+            target=scope.target,
+            base_revision=scope.base_revision,
+            revision=scope.revision,
+            historical_files=scope.historical.files if scope.historical else None,
+            historical_diff=scope.historical.patch if scope.historical else None,
         )
         for finding in findings:
             emit("finding", {"finding": finding.model_dump(mode="json")})
@@ -169,6 +174,53 @@ class ReviewOrchestrator:
             cache.put(result)
         ProviderHealth(root).record(provider, config)
         return result
+
+    def _resolve_scope(
+        self, root: Path, payload: dict[str, Any], config: dict[str, Any]
+    ) -> ReviewScope:
+        target = str(payload.get("target", "staged"))
+        supported = {
+            "staged",
+            "commit",
+            "branch",
+            "pull_request",
+            "merged_pull_request",
+        }
+        if target not in supported:
+            raise CodePreflightError("unsupported_target", f"Unsupported review target: {target}")
+        if target == "commit":
+            revision, commit_base, note = self._commit_revisions(root, payload)
+            return ReviewScope(target, revision, commit_base, note)
+        if target == "merged_pull_request":
+            selector = str(payload.get("pullRequest") or payload.get("revision") or "").strip()
+            if not selector:
+                raise CodePreflightError(
+                    "merged_pr_required", "Select a merged pull request to review"
+                )
+            source = MergedPullRequestResolver().resolve(root, selector)
+            return ReviewScope(
+                target,
+                source.revision,
+                f"github:{source.base_branch}",
+                "Historical GitHub patch and merged-revision file evidence.",
+                source,
+            )
+        base_revision = self._base_revision(root, payload, config) if target != "staged" else None
+        return ReviewScope(target, base_revision=base_revision)
+
+    def _build_context(
+        self, root: Path, config: dict[str, Any], scope: ReviewScope
+    ) -> ContextPackage:
+        if scope.historical:
+            return MergedPullRequestContextBuilder().build(scope.historical, config)
+        return ContextBuilder().build(
+            root,
+            config,
+            target=cast(Literal["staged", "commit", "branch", "pull_request"], scope.target),
+            base_revision=scope.base_revision,
+            revision=scope.revision,
+            comparison_note=scope.comparison_note,
+        )
 
     def _prompt(self, context: str, depth: str, blast_radius: list[BlastRadiusItem]) -> str:
         blast = "\n".join(
@@ -250,6 +302,7 @@ class ReviewOrchestrator:
             "commit": "fast",
             "branch": "standard",
             "pull_request": "deep",
+            "merged_pull_request": "deep",
         }[target]
 
     def _commit_revisions(self, root: Path, payload: dict[str, Any]) -> tuple[str, str, str]:

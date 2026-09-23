@@ -29,6 +29,7 @@ permanent “onboarding completed” flag.
 /reviewcommit <revision>
 /reviewbranch
 /reviewpr
+/reviewmergedpr <number-or-url>
 /findings
 /pr
 /provider

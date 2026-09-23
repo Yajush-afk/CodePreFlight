@@ -23,12 +23,22 @@ class FindingVerifier:
         target: str = "staged",
         base_revision: str | None = None,
         revision: str | None = None,
+        historical_files: dict[str, str] | None = None,
+        historical_diff: str | None = None,
     ) -> tuple[list[Finding], int]:
         verified: list[Finding] = []
         rejected = 0
         with operation("Preflight", "finding verification") as record:
             for draft in drafts:
-                finding = self._verify_one(root, draft, target, base_revision, revision)
+                finding = self._verify_one(
+                    root,
+                    draft,
+                    target,
+                    base_revision,
+                    revision,
+                    historical_files,
+                    historical_diff,
+                )
                 if finding.verification == VerificationState.REJECTED:
                     rejected += 1
                     continue
@@ -44,21 +54,27 @@ class FindingVerifier:
         target: str,
         base_revision: str | None,
         revision: str | None,
+        historical_files: dict[str, str] | None,
+        historical_diff: str | None,
     ) -> Finding:
-        changed = self._changed_lines(root, target, base_revision, revision)
+        changed = (
+            self._parse_changed_lines(historical_diff)
+            if historical_diff is not None
+            else self._changed_lines(root, target, base_revision, revision)
+        )
         evidence: list[EvidenceLocation] = []
         notes: list[str] = []
         checks = successes = 0
         for location in draft.evidence:
             normalized, passed, total, reasons = self._location_rule(
-                root, location, target, revision, changed
+                root, location, target, revision, changed, historical_files
             )
             checks += total
             successes += passed
             notes.extend(reasons)
             if normalized:
                 evidence.append(normalized)
-        passed, total, reasons = self._test_rule(root, draft.suggested_tests)
+        passed, total, reasons = self._test_rule(root, draft.suggested_tests, historical_files)
         checks += total
         successes += passed
         notes.extend(reasons)
@@ -78,13 +94,18 @@ class FindingVerifier:
         target: str,
         revision: str | None,
         changed: dict[str, set[int]],
+        historical_files: dict[str, str] | None,
     ) -> tuple[EvidenceLocation | None, int, int, list[str]]:
         normalized = self._normalize_path(root, evidence.path)
         try:
             (root / normalized).resolve().relative_to(root.resolve())
         except ValueError:
             return None, 0, 1, [f"Evidence path escapes the repository: {evidence.path}"]
-        content = self._selected_content(GitRunner(root), target, normalized, revision)
+        content = (
+            historical_files.get(normalized)
+            if historical_files is not None
+            else self._selected_content(GitRunner(root), target, normalized, revision)
+        )
         if content is None:
             return None, 0, 1, [f"Evidence file does not exist in reviewed state: {evidence.path}"]
         lines = content.splitlines()
@@ -106,7 +127,12 @@ class FindingVerifier:
                 notes.append(f"Referenced symbol '{evidence.symbol}' was not found in {normalized}")
         return evidence.model_copy(update={"path": normalized}), passed, total, notes
 
-    def _test_rule(self, root: Path, suggestions: list[str]) -> tuple[int, int, list[str]]:
+    def _test_rule(
+        self,
+        root: Path,
+        suggestions: list[str],
+        historical_files: dict[str, str] | None,
+    ) -> tuple[int, int, list[str]]:
         passed = total = 0
         notes: list[str] = []
         for suggestion in suggestions:
@@ -115,7 +141,12 @@ class FindingVerifier:
                 continue
             total += 1
             candidate = (root / path).resolve()
-            if candidate.is_relative_to(root.resolve()) and candidate.is_file():
+            exists = (
+                path in historical_files
+                if historical_files is not None
+                else candidate.is_relative_to(root.resolve()) and candidate.is_file()
+            )
+            if exists:
                 passed += 1
             else:
                 notes.append(f"Suggested test file does not exist: {path}")
@@ -147,9 +178,12 @@ class FindingVerifier:
         else:
             args = ["diff", f"{base_revision}..{revision or 'HEAD'}"]
         diff = GitRunner(root).run(*args, "--unified=0", "--no-ext-diff").stdout
+        return self._parse_changed_lines(diff)
+
+    def _parse_changed_lines(self, diff: str | None) -> dict[str, set[int]]:
         changed: dict[str, set[int]] = {}
         current: str | None = None
-        for line in diff.splitlines():
+        for line in (diff or "").splitlines():
             if line.startswith("+++ b/"):
                 current = line[6:]
                 changed.setdefault(current, set())

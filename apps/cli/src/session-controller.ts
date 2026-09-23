@@ -428,14 +428,7 @@ export class SessionController {
       this.patch({ pipeline: undefined });
     const handlers: Record<string, () => void | Promise<void>> = {
       quit: () => this.patch({ shouldExit: true }),
-      help: () =>
-        this.patch({
-          overlay: {
-            kind: "help",
-            title: "Commands and questions",
-            body: this.commands.help(),
-          },
-        }),
+      help: () => this.openHelp(),
       close: () => this.patch({ overlay: undefined }),
       status: () =>
         this.runBusy("Refreshing repository status…", async () => {
@@ -455,6 +448,10 @@ export class SessionController {
       reviewstaged: () => this.review("staged"),
       reviewbranch: () => this.review("branch"),
       reviewpr: () => this.review("pull_request"),
+      reviewmergedpr: () =>
+        argument
+          ? this.review("merged_pull_request", argument)
+          : this.openMergedPullRequests(),
       reviewcommit: () =>
         argument
           ? this.review("commit", argument)
@@ -474,14 +471,7 @@ export class SessionController {
       jobs: () => this.appendJobs(),
       automationgrant: () => this.configureGrant(false),
       automationrevoke: () => this.configureGrant(true),
-      activity: () =>
-        this.patch({
-          overlay: {
-            kind: "preview",
-            title: "Session activity",
-            body: this.activityStore.describe(),
-          },
-        }),
+      activity: () => this.openActivity(),
     };
     const handler = handlers[name];
     if (handler) await handler();
@@ -491,6 +481,26 @@ export class SessionController {
         title: "Unknown command",
         body: `/${name} is unavailable. Use /help.`,
       });
+  }
+
+  private openHelp(): void {
+    this.patch({
+      overlay: {
+        kind: "help",
+        title: "Commands and questions",
+        body: this.commands.help(),
+      },
+    });
+  }
+
+  private openActivity(): void {
+    this.patch({
+      overlay: {
+        kind: "preview",
+        title: "Session activity",
+        body: this.activityStore.describe(),
+      },
+    });
   }
 
   private confirmProviderTest(provider: string): void {
@@ -507,8 +517,19 @@ export class SessionController {
       overlay: {
         kind: "preview",
         title: "What would you like to review?",
-        items: ["staged", "branch", "commit", "pull_request"].map((target) => ({
-          label: target === "pull_request" ? "Existing PR" : target,
+        items: [
+          "staged",
+          "branch",
+          "commit",
+          "pull_request",
+          "merged_pull_request",
+        ].map((target) => ({
+          label:
+            target === "pull_request"
+              ? "Current open PR"
+              : target === "merged_pull_request"
+                ? "Merged GitHub PR"
+                : target,
           value: target,
           action: { kind: "review", value: target },
         })),
@@ -537,7 +558,14 @@ export class SessionController {
         review: () =>
           action.value === "commit"
             ? this.openWorkspace("commits")
-            : this.review(action.value),
+            : action.value === "merged_pull_request"
+              ? this.openMergedPullRequests()
+              : action.value.startsWith("merged_pull_request:")
+                ? this.review(
+                    "merged_pull_request",
+                    action.value.slice("merged_pull_request:".length),
+                  )
+                : this.review(action.value),
         finding: () => this.openFinding(Number(action.value)),
         close: () => {},
         setup: () => this.setupAction(action.value),
@@ -676,9 +704,11 @@ export class SessionController {
     const action =
       command === "reviewcommit"
         ? "commits"
-        : command === "switchbranch"
-          ? "branches"
-          : "tree";
+        : command === "reviewmergedpr"
+          ? "merged_prs"
+          : command === "switchbranch"
+            ? "branches"
+            : "tree";
     const result = await this.engine.request(
       "workspace",
       this.options.repositoryPath,
@@ -693,13 +723,47 @@ export class SessionController {
         (a, b) => Number(a.status === "clean") - Number(b.status === "clean"),
       );
     return eligible.map((item) => {
-      const value = String(item.oid ?? item.name ?? item.path ?? "");
+      const value = String(
+        item.number ?? item.oid ?? item.name ?? item.path ?? "",
+      );
       return {
         value,
-        label: String(item.shortOid ?? value),
-        context: String(item.subject ?? item.status ?? ""),
+        label: String(
+          item.number ? `#${String(item.number)}` : (item.shortOid ?? value),
+        ),
+        context: String(
+          item.title ?? item.subject ?? item.status ?? item.mergedAt ?? "",
+        ),
         completion: `/${command} ${value}`,
       };
+    });
+  }
+
+  private async openMergedPullRequests(): Promise<void> {
+    await this.runBusy("Loading merged pull requests…", async () => {
+      const result = await this.engine.request(
+        "workspace",
+        this.options.repositoryPath,
+        { action: "merged_prs", limit: 30 },
+      );
+      const items = (result.items ?? []) as Array<Record<string, unknown>>;
+      this.patch({
+        overlay: {
+          kind: "preview",
+          title: "Merged pull requests",
+          body: items.length
+            ? "Read-only GitHub history. Select a PR for a deep historical review."
+            : "No merged pull requests were returned by GitHub CLI.",
+          items: items.map((item) => ({
+            label: `#${String(item.number)}  ${String(item.title ?? "Untitled pull request")}`,
+            value: String(item.number),
+            action: {
+              kind: "review",
+              value: `merged_pull_request:${String(item.number)}`,
+            },
+          })),
+        },
+      });
     });
   }
 
@@ -1677,7 +1741,9 @@ export class SessionController {
             this.options.repositoryPath,
             {
               target,
-              revision,
+              ...(target === "merged_pull_request"
+                ? { pullRequest: revision }
+                : { revision }),
               remoteApproved: this.activeProviderId
                 ? this.approvedProviders.has(this.activeProviderId)
                 : false,

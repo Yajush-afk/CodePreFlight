@@ -10,6 +10,7 @@ from .automation import AutomationManager
 from .errors import CodePreflightError
 from .git import GitRunner
 from .git_graph import GitGraphBuilder
+from .merged_pull_request import MergedPullRequestResolver
 from .repository import RepositoryInspector
 
 MAX_TREE_ITEMS = 5_000
@@ -37,9 +38,11 @@ class RepositoryWorkspace:
             return self._file(root, str(payload.get("path", "")))
         if action == "pr":
             return self._pull_request(root, snapshot)
+        if action == "merged_prs":
+            return {"items": MergedPullRequestResolver().list(root, int(payload.get("limit", 30)))}
         raise CodePreflightError(
             "invalid_workspace_action",
-            "Workspace action must be overview, tree, branches, commits, file, or pr",
+            "Workspace action must be overview, tree, branches, commits, file, pr, or merged_prs",
         )
 
     def _tree(self, root: Path, snapshot: Any) -> dict[str, Any]:
