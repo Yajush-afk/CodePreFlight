@@ -7,7 +7,9 @@ branches, or repository paths. File suggestions prioritize changed paths.
 
 Start with `/provider`, `/model`, `/variant`, and `/review`: these open guided pickers.
 Picker choices invoke typed actions rather than hidden commands. `/reviewstaged`,
-`/reviewbranch`, `/reviewcommit <revision>`, `/reviewpr`, and `/scanfull` are direct actions.
+`/reviewbranch`, `/reviewcommit <revision>`, `/reviewpr`,
+`/reviewmergedpr <number-or-url>`, and `/scanfull` are direct actions. Merged-PR review
+uses authenticated, read-only GitHub CLI data and does not switch or fetch branches.
 Use `/files`, `/file <path>`, `/branches`, `/switchbranch <branch>`, and `/commits` to navigate.
 `/providerlogin <provider>`, `/providertest <provider>`, and `/providerswitch <provider>`
 are the provider shortcuts. `/mode`, `/jobs`, `/automationgrant`, `/automationrevoke`,

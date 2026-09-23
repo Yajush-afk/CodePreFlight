@@ -36,6 +36,7 @@ const DEFINITIONS: Array<[string, string, string?]> = [
   ["reviewbranch", "Review the branch"],
   ["reviewcommit", "Review a reachable commit", "commit"],
   ["reviewpr", "Deep PR review"],
+  ["reviewmergedpr", "Review a merged GitHub PR", "number-or-url"],
   ["providerlogin", "Open provider-owned login", "provider"],
   ["providertest", "Test with synthetic code", "provider"],
   ["providerswitch", "Select a provider", "provider"],

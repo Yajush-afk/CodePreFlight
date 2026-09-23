@@ -150,6 +150,17 @@ class FakeEngine implements SessionEngine {
         return { path: payload.path, diff: "diff --git a/auth.py b/auth.py" };
       }
       if (payload.action === "pr") return { found: false };
+      if (payload.action === "merged_prs") {
+        return {
+          items: [
+            {
+              number: 38,
+              title: "Fix historical review",
+              mergedAt: "2026-09-20T10:00:00Z",
+            },
+          ],
+        };
+      }
     }
     if (command === "git_action") {
       if (payload.action === "switch_preview") {
@@ -342,6 +353,30 @@ describe("SessionController", () => {
       engine.requests.filter((request) => request.command === "explain"),
     ).toHaveLength(0);
     expect(controller.state.transcript.at(-1)?.title).toBe("Repository status");
+  });
+
+  it("lists and reviews a selected merged pull request", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/reviewmergedpr");
+    expect(controller.state.overlay?.title).toBe("Merged pull requests");
+    expect(controller.state.overlay?.items?.[0]?.label).toContain("#38");
+
+    await controller.select({
+      kind: "review",
+      value: "merged_pull_request:38",
+    });
+    await controller.confirm(controller.state.pendingDecision!.id, true);
+
+    expect(engine.requests.at(-1)).toMatchObject({
+      command: "review",
+      payload: { target: "merged_pull_request", pullRequest: "38" },
+    });
   });
 
   it("asks once for remote consent and retries the review", async () => {

@@ -665,6 +665,10 @@ program
   .option("--staged", "review the staged change set")
   .option("--commit <revision>", "review a reachable local commit")
   .option("--branch", "review the current branch against its base")
+  .option(
+    "--merged-pr <number-or-url>",
+    "review a merged GitHub pull request without changing branches",
+  )
   .option("--base <branch>", "override the detected base branch")
   .option("--provider <provider>", "override the configured provider")
   .option(
@@ -679,6 +683,7 @@ program
       staged?: boolean;
       commit?: string;
       branch?: boolean;
+      mergedPr?: string;
       base?: string;
       provider?: string;
       approve?: boolean;
@@ -690,10 +695,11 @@ program
         Boolean(options.staged),
         Boolean(options.commit),
         Boolean(options.branch),
+        Boolean(options.mergedPr),
       ].filter(Boolean).length;
       if (targets !== 1) {
         process.stderr.write(
-          "Choose exactly one review target: --staged, --commit <revision>, or --branch\n",
+          "Choose exactly one review target: --staged, --commit <revision>, --branch, or --merged-pr <number-or-url>\n",
         );
         process.exitCode = 2;
         return;
@@ -705,10 +711,13 @@ program
           {
             target: options.commit
               ? "commit"
-              : options.branch
-                ? "branch"
-                : "staged",
+              : options.mergedPr
+                ? "merged_pull_request"
+                : options.branch
+                  ? "branch"
+                  : "staged",
             revision: options.commit,
+            pullRequest: options.mergedPr,
             base: options.base,
             provider: options.provider,
             remoteApproved: Boolean(options.approve),
