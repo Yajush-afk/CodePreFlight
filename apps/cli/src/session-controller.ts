@@ -120,6 +120,7 @@ export interface SessionState {
   interruptionNotice?: string;
   header?: SessionHeader;
   graph?: GitGraph;
+  transcriptOnly?: boolean;
   scanProgress?: ScanProgressView;
   scanBatchStartedAt?: number;
   recentOperation?: string;
@@ -442,6 +443,7 @@ export class SessionController {
         }),
       files: () => this.openWorkspace("tree"),
       graph: () => this.openGraph(),
+      copyview: () => this.toggleTranscriptOnly(),
       branches: () => this.openWorkspace("branches"),
       commits: () => this.openWorkspace("commits"),
       file: () => this.previewFile(argument),
@@ -495,6 +497,17 @@ export class SessionController {
         title: "Commands and questions",
         body: this.commands.help(),
       },
+    });
+  }
+
+  private toggleTranscriptOnly(): void {
+    const transcriptOnly = !this.currentState.transcriptOnly;
+    this.patch({ transcriptOnly });
+    this.append({
+      kind: "system",
+      body: transcriptOnly
+        ? "Transcript-only copy mode enabled. The Git graph is hidden; run /copyview again to restore it."
+        : "Transcript-only copy mode disabled. The Git graph is visible again.",
     });
   }
 

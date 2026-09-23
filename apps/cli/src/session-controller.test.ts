@@ -419,6 +419,25 @@ describe("SessionController", () => {
     expect(controller.state.transcript.at(-1)?.title).toBe("Repository status");
   });
 
+  it("toggles a transcript-only copy view without mutating the repository", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/copyview");
+    expect(controller.state.transcriptOnly).toBe(true);
+    expect(controller.state.transcript.at(-1)?.body).toContain(
+      "graph is hidden",
+    );
+
+    await controller.submit("/copyview");
+    expect(controller.state.transcriptOnly).toBe(false);
+    expect(controller.state.transcript.at(-1)?.body).toContain("visible again");
+  });
+
   it("routes working-tree review without staging or committing", async () => {
     const engine = new FakeEngine();
     const controller = new SessionController({

@@ -16,6 +16,7 @@ const DEFINITIONS: Array<[string, string, string?]> = [
   ["status", "Refresh repository status"],
   ["files", "Browse repository files"],
   ["graph", "Show local commit graph"],
+  ["copyview", "Toggle transcript-only copy mode"],
   ["branches", "Browse local branches"],
   ["commits", "Browse reachable commits"],
   ["review", "Choose what to review"],

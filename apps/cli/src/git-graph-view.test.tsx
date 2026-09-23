@@ -29,7 +29,20 @@ it("shows the display-only panel on wide terminals and summary on narrow ones", 
   );
   expect(wide.lastFrame()).toContain("Local history");
   expect(wide.lastFrame()).toContain("Display only");
+  expect(wide.lastFrame()).toContain("┌");
   wide.unmount();
+  const copy = render(
+    <SessionView
+      state={{ ...state, transcriptOnly: true }}
+      input=""
+      onInput={() => {}}
+      onSubmit={() => {}}
+      terminalWidth={120}
+    />,
+  );
+  expect(copy.lastFrame()).not.toContain("Local history");
+  expect(copy.lastFrame()).toContain("/copyview");
+  copy.unmount();
   const narrow = render(
     <SessionView
       state={state}
