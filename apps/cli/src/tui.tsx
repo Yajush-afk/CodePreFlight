@@ -87,6 +87,7 @@ export function SessionView({
   const showGraph =
     terminalWidth >= 100 &&
     Boolean(state.graph) &&
+    !state.transcriptOnly &&
     !state.overlay &&
     !state.pendingDecision;
   const lines = presenter.transcript(
@@ -227,11 +228,16 @@ export function SessionView({
           )}
         </Box>
         {showGraph && state.graph && (
-          <GitGraphView
-            graph={state.graph}
-            height={bodyHeight}
-            colorEnabled={colorEnabled}
-          />
+          <Box
+            borderStyle="single"
+            borderColor={colorEnabled ? "gray" : undefined}
+          >
+            <GitGraphView
+              graph={state.graph}
+              height={Math.max(1, bodyHeight - 2)}
+              colorEnabled={colorEnabled}
+            />
+          </Box>
         )}
       </Box>
       {state.pipeline && (
@@ -302,8 +308,8 @@ export function SessionView({
           : `Reviewer unavailable: ${header?.providerAuthentication === "required" ? "authentication required" : "setup needed"} · /provider to fix`}
       </Text>
       <Text dimColor>
-        /help · /findings · ↑↓/PgUp/PgDn scroll · Ctrl+P/N history · Esc
-        interrupt · Ctrl+C exit
+        /help · /findings · /copyview · ↑↓/PgUp/PgDn scroll · Ctrl+P/N history ·
+        Esc interrupt · Ctrl+C exit
       </Text>
     </Box>
   );
