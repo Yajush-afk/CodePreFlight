@@ -663,6 +663,10 @@ program
   .command("review")
   .description("review repository changes")
   .option("--staged", "review the staged change set")
+  .option(
+    "--working",
+    "review staged, unstaged, and eligible untracked changes together",
+  )
   .option("--commit <revision>", "review a reachable local commit")
   .option("--branch", "review the current branch against its base")
   .option(
@@ -681,6 +685,7 @@ program
   .action(
     async (options: {
       staged?: boolean;
+      working?: boolean;
       commit?: string;
       branch?: boolean;
       mergedPr?: string;
@@ -693,13 +698,14 @@ program
     }) => {
       const targets = [
         Boolean(options.staged),
+        Boolean(options.working),
         Boolean(options.commit),
         Boolean(options.branch),
         Boolean(options.mergedPr),
       ].filter(Boolean).length;
       if (targets !== 1) {
         process.stderr.write(
-          "Choose exactly one review target: --staged, --commit <revision>, --branch, or --merged-pr <number-or-url>\n",
+          "Choose exactly one review target: --staged, --working, --commit <revision>, --branch, or --merged-pr <number-or-url>\n",
         );
         process.exitCode = 2;
         return;
@@ -713,9 +719,11 @@ program
               ? "commit"
               : options.mergedPr
                 ? "merged_pull_request"
-                : options.branch
-                  ? "branch"
-                  : "staged",
+                : options.working
+                  ? "working"
+                  : options.branch
+                    ? "branch"
+                    : "staged",
             revision: options.commit,
             pullRequest: options.mergedPr,
             base: options.base,

@@ -446,6 +446,7 @@ export class SessionController {
       review: () => this.openReviewPicker(),
       findings: () => this.openFindings(argument),
       reviewstaged: () => this.review("staged"),
+      reviewworking: () => this.review("working"),
       reviewbranch: () => this.review("branch"),
       reviewpr: () => this.review("pull_request"),
       reviewmergedpr: () =>
@@ -519,6 +520,7 @@ export class SessionController {
         title: "What would you like to review?",
         items: [
           "staged",
+          "working",
           "branch",
           "commit",
           "pull_request",

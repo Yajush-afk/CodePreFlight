@@ -206,7 +206,9 @@ class ContextPackage(StrictModel):
     manifest: ContextManifest
     changed_files: list[str]
     checks: list[CheckResult]
-    target: Literal["staged", "commit", "branch", "pull_request", "merged_pull_request"] = "staged"
+    target: Literal[
+        "staged", "working", "commit", "branch", "pull_request", "merged_pull_request"
+    ] = "staged"
     base_revision: str | None = None
     revision: str | None = None
     comparison_note: str | None = None

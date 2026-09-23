@@ -29,9 +29,11 @@ class ConversationContext:
         if not isinstance(review, dict) or review.get("target") not in {
             "full",
             "staged",
+            "working",
             "commit",
             "branch",
             "pull_request",
+            "merged_pull_request",
         }:
             raise CodePreflightError("invalid_review_context", "Review context is malformed")
         findings = review.get("findings", [])
@@ -51,6 +53,8 @@ class ConversationContext:
             if not isinstance(locations, list):
                 continue
             for evidence in locations[:3]:
+                if review["target"] == "merged_pull_request":
+                    continue
                 excerpt = self._excerpt(root, evidence)
                 if excerpt is None:
                     continue

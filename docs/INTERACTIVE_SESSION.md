@@ -26,6 +26,7 @@ permanent “onboarding completed” flag.
 /commits
 /review
 /reviewstaged
+/reviewworking
 /reviewcommit <revision>
 /reviewbranch
 /reviewpr

@@ -7,10 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from .activity import publish
 from .adapters import ProviderRegistry
 from .base import BaseResolver
 from .blast_radius import BlastRadiusAnalyzer
 from .cache import ReviewCache
+from .checks import CheckRunner
 from .config import load_config
 from .context import ContextBuilder
 from .errors import CodePreflightError
@@ -22,6 +24,8 @@ from .merged_pull_request import (
 )
 from .models import (
     BlastRadiusItem,
+    CheckDefinition,
+    CheckResult,
     ContextPackage,
     Finding,
     ProviderKind,
@@ -35,6 +39,7 @@ from .review_consent import require_review_consent
 from .review_invocation import ReviewInvocation
 from .trust import is_trusted
 from .verification import FindingVerifier
+from .working_tree import WorkingTreeContextBuilder, WorkingTreeSnapshot
 
 EventEmitter = Callable[[str, dict[str, Any]], None]
 PROMPT_VERSION = "review-v3"
@@ -62,6 +67,8 @@ class ReviewScope:
     base_revision: str | None = None
     comparison_note: str | None = None
     historical: MergedPullRequestSource | None = None
+    working: WorkingTreeSnapshot | None = None
+    checks: tuple[CheckResult, ...] = ()
 
 
 class ReviewOrchestrator:
@@ -118,11 +125,13 @@ class ReviewOrchestrator:
             scope.target,
             scope.base_revision,
             blast_radius,
+            scope.working.fingerprint if scope.working else None,
         )
         cache = ReviewCache(root)
         if bool(config.get("cache", {}).get("enabled", True)) and not bool(payload.get("noCache")):
             cached = cache.get(fingerprint, context)
             if cached:
+                self._require_current_working_snapshot(root, scope)
                 emit("progress", {"message": "Using cached review for unchanged repository state"})
                 return cached
 
@@ -146,6 +155,7 @@ class ReviewOrchestrator:
                 failure=response,
             )
 
+        self._require_current_working_snapshot(root, scope)
         emit("progress", {"message": "Verifying provider findings against the repository"})
         emit("workflow_stage", {"stage": "verify", "actor": "Preflight"})
         findings, rejected = FindingVerifier().verify(
@@ -154,8 +164,8 @@ class ReviewOrchestrator:
             target=scope.target,
             base_revision=scope.base_revision,
             revision=scope.revision,
-            historical_files=scope.historical.files if scope.historical else None,
-            historical_diff=scope.historical.patch if scope.historical else None,
+            historical_files=self._evidence_files(scope),
+            historical_diff=self._evidence_diff(scope),
         )
         for finding in findings:
             emit("finding", {"finding": finding.model_dump(mode="json")})
@@ -181,6 +191,7 @@ class ReviewOrchestrator:
         target = str(payload.get("target", "staged"))
         supported = {
             "staged",
+            "working",
             "commit",
             "branch",
             "pull_request",
@@ -205,6 +216,14 @@ class ReviewOrchestrator:
                 "Historical GitHub patch and merged-revision file evidence.",
                 source,
             )
+        if target == "working":
+            WorkingTreeSnapshot.capture(root)
+            definitions = [
+                CheckDefinition.model_validate(item) for item in config.get("checks", [])
+            ]
+            publish("workflow_stage", {"stage": "checks", "actor": "Check"})
+            checks = tuple(CheckRunner().run(root, definitions))
+            return ReviewScope(target, working=WorkingTreeSnapshot.capture(root), checks=checks)
         base_revision = self._base_revision(root, payload, config) if target != "staged" else None
         return ReviewScope(target, base_revision=base_revision)
 
@@ -213,6 +232,8 @@ class ReviewOrchestrator:
     ) -> ContextPackage:
         if scope.historical:
             return MergedPullRequestContextBuilder().build(scope.historical, config)
+        if scope.working:
+            return WorkingTreeContextBuilder().build(scope.working, config, list(scope.checks))
         return ContextBuilder().build(
             root,
             config,
@@ -221,6 +242,32 @@ class ReviewOrchestrator:
             revision=scope.revision,
             comparison_note=scope.comparison_note,
         )
+
+    def _require_current_working_snapshot(self, root: Path, scope: ReviewScope) -> None:
+        if not scope.working:
+            return
+        try:
+            current = WorkingTreeSnapshot.capture(root).fingerprint
+        except CodePreflightError as error:
+            if error.code != "empty_change_set":
+                raise
+            current = "clean"
+        if current != scope.working.fingerprint:
+            raise CodePreflightError(
+                "review_snapshot_changed",
+                "Working tree changed during review; run /reviewworking again",
+                recoverable=True,
+            )
+
+    def _evidence_files(self, scope: ReviewScope) -> dict[str, str] | None:
+        if scope.historical:
+            return scope.historical.files
+        return scope.working.files if scope.working else None
+
+    def _evidence_diff(self, scope: ReviewScope) -> str | None:
+        if scope.historical:
+            return scope.historical.patch
+        return scope.working.verification_diff if scope.working else None
 
     def _prompt(self, context: str, depth: str, blast_radius: list[BlastRadiusItem]) -> str:
         blast = "\n".join(
@@ -264,6 +311,7 @@ class ReviewOrchestrator:
         target: str,
         base_revision: str | None,
         blast_radius: list[BlastRadiusItem],
+        state_fingerprint: str | None = None,
     ) -> str:
         provider_id = str(provider["id"])
         provider_config = config.get("providers", {}).get(provider_id, {})
@@ -280,6 +328,7 @@ class ReviewOrchestrator:
                 "target": target,
                 "base": base_revision,
                 "blastRadius": [item.model_dump(mode="json") for item in blast_radius],
+                "stateFingerprint": state_fingerprint,
                 "promptVersion": PROMPT_VERSION,
             },
             sort_keys=True,
@@ -299,6 +348,7 @@ class ReviewOrchestrator:
     def _default_depth(self, target: str) -> str:
         return {
             "staged": "fast",
+            "working": "fast",
             "commit": "fast",
             "branch": "standard",
             "pull_request": "deep",
