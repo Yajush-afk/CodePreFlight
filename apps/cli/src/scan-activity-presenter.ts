@@ -6,89 +6,73 @@ export interface ScanProgressView {
   completedBatches?: number;
   resumedBatches?: number;
   sources?: string[];
+  activeBatches?: Array<{ batch: number; sources: string[] }>;
   characters?: number;
   message?: string;
 }
 
 export class ScanActivityPresenter {
-  progress(progress: ScanProgressView, provider: string): string {
-    if (progress.stage === "checks") return this.checks(progress);
-    if (progress.stage === "review") return this.review(progress, provider);
+  progress(progress: ScanProgressView): string {
+    if (progress.stage === "checks")
+      return progress.status === "completed"
+        ? `Preflight completed deterministic checks\n${progress.message ?? "Check results are ready."}`
+        : "Preflight is running approved checks";
+    if (progress.stage === "review") return this.review(progress);
     if (progress.stage === "verification")
-      return "Preflight is verifying findings\nChecking paths, lines, symbols, and repository evidence.";
+      return "Preflight is verifying findings\nChecking cited files, lines, and repository evidence.";
     if (progress.stage === "synthesis")
-      return `${provider} is synthesizing verified results\nAlmost there—assembling the final evidence-backed review.`;
+      return "Preflight is assembling the verified report";
     return progress.message ?? "Preflight is processing the repository scan.";
   }
 
-  heartbeat(
-    progress: ScanProgressView | undefined,
-    provider: string,
-    elapsedMs: number,
-  ): string {
-    const elapsed = this.duration(elapsedMs);
-    if (progress?.stage === "review" && progress.batch && progress.batches) {
-      return `${provider} is still reviewing batch ${progress.batch} of ${progress.batches} · ${elapsed}\n${this.context(progress)}`;
+  heartbeat(progress: ScanProgressView | undefined, elapsedMs: number): string {
+    if (progress?.stage === "review" && progress.batches) {
+      const active = progress.activeBatches?.length
+        ? progress.activeBatches
+        : progress.batch
+          ? [{ batch: progress.batch, sources: progress.sources ?? [] }]
+          : [];
+      const label =
+        active.length > 1
+          ? `batches ${active.map((item) => item.batch).join(" and ")}`
+          : `batch ${active[0]?.batch ?? progress.batch ?? 0}`;
+      const sources =
+        active.length > 1
+          ? active
+              .map(
+                (item) =>
+                  `${item.batch}: ${this.sources({ sources: item.sources }).replace("Included: ", "")}`,
+              )
+              .join("\n")
+          : this.sources({ sources: active[0]?.sources ?? progress.sources });
+      return `Preflight is reviewing ${label} of ${progress.batches} · ${this.duration(elapsedMs)} elapsed\n${sources}`;
     }
-    return `${provider} is still analyzing · ${elapsed}\nThe provider process is active; no additional repository content was sent.`;
+    return `Preflight is waiting for analysis · ${this.duration(elapsedMs)} elapsed`;
   }
 
-  private checks(progress: ScanProgressView): string {
-    if (progress.status === "completed")
-      return `${progress.message ?? "Deterministic checks completed"}\nPassing the observed results into the review context.`;
-    return "Preflight is running approved deterministic checks\nCatching mechanical failures before provider review.";
-  }
-
-  private review(progress: ScanProgressView, provider: string): string {
+  private review(progress: ScanProgressView): string {
     const batch = progress.batch ?? 0;
     const batches = progress.batches ?? 0;
+    if (progress.status === "rate_limited")
+      return `${progress.message ?? "Preflight reduced concurrent requests to one"}\nCompleted results remain cached; remaining batches will run one at a time.`;
+    if (progress.activeBatches?.length)
+      return this.heartbeat(progress, 0).replace(" · 0s elapsed", "");
     if (progress.status === "cached")
-      return `Preflight reused cached batch ${batch} of ${batches}\nNo provider request was needed for this unchanged batch.`;
-    if (progress.status === "completed") {
-      const next =
-        batch === batches
-          ? "All review batches are complete; evidence verification is next."
-          : `Result cached locally; ${batches - batch} review batch${batches - batch === 1 ? " remains" : "es remain"}.`;
-      return `Preflight completed batch ${batch} of ${batches}\n${next}`;
-    }
-    return `${provider} is reviewing batch ${batch} of ${batches}\n${this.context(progress)}`;
+      return `Preflight reused cached batch ${batch} of ${batches}\nNo new review request was needed.`;
+    if (progress.status === "completed")
+      return `Preflight completed batch ${batch} of ${batches}\n${Math.max(0, batches - (progress.completedBatches ?? batch))} batches remain.`;
+    return `Preflight is reviewing batch ${batch} of ${batches}\n${this.sources(progress)}`;
   }
 
-  private context(progress: ScanProgressView): string {
+  private sources(progress: ScanProgressView): string {
     const sources = progress.sources ?? [];
-    const area = this.area(sources);
-    if (progress.characters && progress.characters >= 30_000)
-      return `${area} context · dense cross-file batch; giving the relationships a careful pass.`;
-    if (progress.batch === progress.batches)
-      return `${area} context · final batch before evidence verification.`;
-    const first = sources[0];
-    const remaining = Math.max(0, sources.length - 1);
-    return first
-      ? `${area} context · ${first}${remaining ? ` + ${remaining} related source${remaining === 1 ? "" : "s"}` : ""}`
-      : `${area} context · building the next evidence-backed section.`;
-  }
-
-  private area(sources: string[]): string {
-    const frontend = sources.some((path) =>
-      /(^apps\/cli\/|\.(tsx?|jsx?|css|scss)$)/i.test(path),
-    );
-    const backend = sources.some((path) =>
-      /(^engine\/|(^|\/)(api|server|backend)(\/|\.)|\.py$)/i.test(path),
-    );
-    const tests = sources.some((path) =>
-      /(^|\/)(tests?|specs?)(\/|\.)|\.(test|spec)\./i.test(path),
-    );
-    const selected = [
-      frontend && "frontend",
-      backend && "backend",
-      tests && "tests",
-    ].filter(Boolean);
-    return selected.length ? selected.join(" + ") : "repository";
+    if (!sources.length) return "Context: source list unavailable";
+    return `Included: ${sources.join(" · ")}`;
   }
 
   private duration(milliseconds: number): string {
     const seconds = Math.max(0, Math.floor(milliseconds / 1000));
-    if (seconds < 60) return `${seconds}s elapsed`;
-    return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s elapsed`;
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
   }
 }

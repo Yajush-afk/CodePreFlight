@@ -5,6 +5,7 @@ interface ScanProgress {
   batch?: number;
   batches?: number;
   completedBatches: number;
+  activeBatches?: number[];
 }
 
 export class RequestActivityTracker {
@@ -29,6 +30,16 @@ export class RequestActivityTracker {
         batch: this.number(event.payload?.batch),
         batches: this.number(event.payload?.batches),
         completedBatches: this.number(event.payload?.completedBatches) ?? 0,
+        activeBatches: Array.isArray(event.payload?.activeBatches)
+          ? event.payload.activeBatches
+              .map((item: unknown) =>
+                this.number((item as { batch?: unknown })?.batch),
+              )
+              .filter(
+                (item: number | undefined): item is number =>
+                  item !== undefined,
+              )
+          : undefined,
       };
       if (stage === "review" && event.payload?.status === "started")
         this.lastProviderActivityAt = now;
@@ -71,6 +82,10 @@ export class RequestActivityTracker {
   }
 
   private location(): string {
+    if (this.scan?.stage === "review" && this.scan.activeBatches?.length) {
+      const batches = this.scan.activeBatches.join(" and ");
+      return `Scan interrupted while reviewing ${this.scan.activeBatches.length > 1 ? "batches" : "batch"} ${batches} of ${this.scan.batches}`;
+    }
     if (this.scan?.stage === "review" && this.scan.batch && this.scan.batches)
       return `Scan interrupted while reviewing batch ${this.scan.batch} of ${this.scan.batches}`;
     if (this.scan?.stage === "verification")

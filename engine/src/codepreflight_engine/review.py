@@ -124,7 +124,7 @@ class ReviewOrchestrator:
                 return cached
 
         require_review_consent(provider, context, config, payload, emit)
-        emit("progress", {"message": f"Requesting review from {provider.name}"})
+        emit("progress", {"message": "Preflight sent the selected context for review"})
         emit("workflow_stage", {"stage": "provider", "actor": "Provider"})
         response = ReviewInvocation(adapter, root).run(
             self._prompt(context.content, depth, blast_radius), emit

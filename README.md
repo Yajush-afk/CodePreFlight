@@ -70,9 +70,11 @@ Each finding includes severity, confidence, evidence, verification state, impact
 recommended action. Running `preflight` opens a fullscreen, ephemeral repository session with a
 persistent composer, guided setup, and a display-only local commit graph. Use `/files`,
 `/branches`, `/commits`, `/review`, `/reviewcommit <revision>`, `/reviewbranch`, `/reviewpr`,
-`/mode`, `/scanfull`, and `/help`; plain-language questions stay
-scoped to repository, Git, review, and history evidence. Arrow keys navigate focused lists and
-composer history. Reviews advise by default; only verified severities configured by the
+`/mode`, `/scanfull`, `/findings`, and `/help`; plain-language questions stay
+scoped to repository, Git, review, and history evidence. After a review, `/findings` opens a
+scrollable explorer and follow-up questions can discuss multiple findings without staged changes.
+Arrow keys navigate focused lists or scroll the transcript; Ctrl+P/Ctrl+N recall composer history.
+Reviews advise by default; only verified severities configured by the
 repository can block a managed hook. Operational provider failures are fail-open unless the
 repository explicitly opts into fail-closed behavior. Standard `git commit --no-verify` and the
 temporary `PREFLIGHT_BYPASS=1` environment variable remain explicit bypass routes.

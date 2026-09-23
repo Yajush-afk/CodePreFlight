@@ -10,6 +10,7 @@ export class WorkspacePresenter {
     return [
       `${String(manifest.eligibleFiles)} eligible files · ${String(manifest.excludedFiles)} excluded · ${String(manifest.redactions)} redactions`,
       `${Number(manifest.totalSelectedCharacters ?? 0).toLocaleString()} selected characters · approximately ${String(manifest.providerRequests)} provider requests (repair may add requests)`,
+      `Concurrent review requests: up to ${String(manifest.parallelRequests ?? 1)}`,
       `Reviewer: ${String(manifest.provider)} · ${String(manifest.model)} · ${String(manifest.variant ?? "default")}`,
       `Destination: ${String(manifest.destination)} (${String(manifest.privacyCategory)})`,
       `Planned checks: ${JSON.stringify(manifest.plannedChecks)}`,

@@ -7,6 +7,7 @@ import {
   useWorkspaceSession,
   useWorkspaceDimensions,
   useCommandSuggestions,
+  useScanClock,
 } from "./workspace-hooks.js";
 import {
   SessionController,
@@ -19,6 +20,7 @@ import { WorkspacePresenter } from "./workspace-presenter.js";
 import { WorkingIndicator } from "./working-indicator.js";
 import { GitGraphView } from "./git-graph-view.js";
 import { GitGraphPresenter } from "./git-graph-presenter.js";
+import { ScanActivityPresenter } from "./scan-activity-presenter.js";
 
 interface AppProps {
   repositoryPath: string;
@@ -42,6 +44,7 @@ interface SessionViewProps {
   fullscreen?: boolean;
   animate?: boolean;
   scrollOffset?: number;
+  now?: number;
 }
 
 const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
@@ -68,6 +71,7 @@ export function SessionView({
   fullscreen = false,
   animate = false,
   scrollOffset = 0,
+  now = Date.now(),
 }: SessionViewProps): React.JSX.Element {
   if (terminalHandoff) return <></>;
   const header = state.header;
@@ -90,6 +94,17 @@ export function SessionView({
     scrollOffset,
   );
   const overlay = state.overlay;
+  const reviewing =
+    state.scanProgress?.stage === "review" &&
+    (state.scanProgress.status === "started" ||
+      Boolean(state.scanProgress.activeBatches?.length));
+  const activity =
+    reviewing && state.scanBatchStartedAt
+      ? new ScanActivityPresenter().heartbeat(
+          state.scanProgress,
+          Math.max(0, now - state.scanBatchStartedAt),
+        )
+      : state.activity;
   return (
     <Box
       flexDirection="column"
@@ -182,7 +197,11 @@ export function SessionView({
                   limit={Math.max(2, Math.min(8, bodyHeight - 4))}
                 />
               ) : null}
-              <Text dimColor>Esc back · PgUp/PgDn inspect</Text>
+              <Text dimColor>
+                {overlay.kind === "finding"
+                  ? "Ask below about this finding · Esc back · PgUp/PgDn read"
+                  : "↑↓ select · Enter open · Esc back · PgUp/PgDn read"}
+              </Text>
             </>
           ) : (
             lines.map((line, index) => {
@@ -223,9 +242,14 @@ export function SessionView({
             .join("  ")}
         </Text>
       )}
-      {state.activity && (
-        <WorkingIndicator label={state.activity} animate={animate} />
-      )}
+      {activity && <WorkingIndicator label={activity} animate={animate} />}
+      {state.busy &&
+        state.recentOperation &&
+        state.scanProgress?.stage !== "review" && (
+          <Text dimColor wrap="truncate-end">
+            {state.recentOperation}
+          </Text>
+        )}
       {state.interruptionNotice && (
         <Text color={colorEnabled ? "yellow" : undefined}>
           {state.interruptionNotice}
@@ -263,7 +287,9 @@ export function SessionView({
           value={input}
           onChange={onInput}
           onSubmit={onSubmit}
-          focus={!state.pendingDecision && !overlay}
+          focus={
+            !state.pendingDecision && (!overlay || overlay.kind === "finding")
+          }
           placeholder="Ask about this repository, or type /"
         />
       </Box>
@@ -273,7 +299,8 @@ export function SessionView({
           : `Reviewer unavailable: ${header?.providerAuthentication === "required" ? "authentication required" : "setup needed"} · /provider to fix`}
       </Text>
       <Text dimColor>
-        /help · PgUp/PgDn history · Esc interrupt · Ctrl+C exit
+        /help · /findings · ↑↓/PgUp/PgDn scroll · Ctrl+P/N history · Esc
+        interrupt · Ctrl+C exit
       </Text>
     </Box>
   );
@@ -286,6 +313,7 @@ export function App(options: AppProps): React.JSX.Element {
   const [scrollOffset, setScrollOffset] = useState(0);
   const palette = useCommandSuggestions(input, controller);
   const dimensions = useWorkspaceDimensions();
+  const now = useScanClock(state);
   useEffect(
     () => setScrollOffset(0),
     [state.overlay?.title, state.pendingDecision?.id],
@@ -341,6 +369,7 @@ export function App(options: AppProps): React.JSX.Element {
         process.env.PREFLIGHT_NO_ANIMATION !== "1"
       }
       scrollOffset={scrollOffset}
+      now={now}
     />
   );
 }

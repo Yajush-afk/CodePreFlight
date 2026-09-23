@@ -62,21 +62,67 @@ function navigateWorkspace(
   value: string,
   key: Key,
 ): void {
-  const { state, controller } = context;
-  if (key.pageUp || key.pageDown) {
-    const direction = key.pageUp ? -5 : 5;
-    const overlay = Boolean(state.overlay || state.pendingDecision);
-    context.setScrollOffset((offset) =>
-      Math.max(0, offset + (overlay ? direction : -direction)),
+  scrollWorkspace(context, key);
+  if (historyWorkspace(context, value, key)) return;
+  if (context.state.pendingDecision && ["y", "n"].includes(value))
+    void context.controller.confirm(
+      context.state.pendingDecision.id,
+      value === "y",
     );
+}
+
+function scrollWorkspace(context: WorkspaceInput, key: Key): void {
+  if (key.pageUp || key.pageDown) {
+    scrollPage(context, key.pageUp ? -5 : 5);
+    return;
   }
-  if (!state.overlay && !state.pendingDecision && !state.busy) {
-    if (key.upArrow) context.setInput(controller.history("previous"));
-    if (key.downArrow) context.setInput(controller.history("next"));
+  scrollArrow(context, key);
+}
+
+function scrollPage(context: WorkspaceInput, step: number): void {
+  const overlay = Boolean(
+    context.state.overlay || context.state.pendingDecision,
+  );
+  context.setScrollOffset((offset) =>
+    Math.max(0, offset + (overlay ? step : -step)),
+  );
+}
+
+function scrollArrow(context: WorkspaceInput, key: Key): void {
+  const overlay = Boolean(
+    context.state.overlay || context.state.pendingDecision,
+  );
+  if (
+    context.state.overlay?.kind === "finding" &&
+    (key.upArrow || key.downArrow)
+  ) {
+    context.setScrollOffset((offset) =>
+      Math.max(0, offset + (key.downArrow ? 1 : -1)),
+    );
+    return;
   }
-  if (state.pendingDecision && ["y", "n"].includes(value)) {
-    void controller.confirm(state.pendingDecision.id, value === "y");
-  }
+  if (!context.input && !overlay && key.upArrow)
+    context.setScrollOffset((offset) => offset + 1);
+  if (!context.input && !overlay && key.downArrow)
+    context.setScrollOffset((offset) => Math.max(0, offset - 1));
+}
+
+function historyWorkspace(
+  context: WorkspaceInput,
+  value: string,
+  key: Key,
+): boolean {
+  if (
+    context.state.overlay ||
+    context.state.pendingDecision ||
+    !key.ctrl ||
+    !["p", "n"].includes(value)
+  )
+    return false;
+  context.setInput(
+    context.controller.history(value === "p" ? "previous" : "next"),
+  );
+  return true;
 }
 
 export function useWorkspaceInput(context: WorkspaceInput): void {

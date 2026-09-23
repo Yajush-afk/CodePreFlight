@@ -9,6 +9,7 @@ function context(overrides: Partial<WorkspaceInput> = {}): WorkspaceInput {
       confirm: vi.fn(),
       interrupt: vi.fn(),
       dispose: vi.fn(),
+      history: vi.fn(() => "/scanfull"),
     },
     state: {},
     input: "",
@@ -57,5 +58,16 @@ describe("workspace keyboard priority", () => {
     handleWorkspaceKey(state, "c", { ctrl: true } as Key);
     expect(state.controller.dispose).toHaveBeenCalledOnce();
     expect(state.exit).toHaveBeenCalledOnce();
+  });
+  it("scrolls an empty transcript composer and reserves command history for Ctrl+P/N", () => {
+    const state = context();
+    handleWorkspaceKey(state, "", { upArrow: true } as Key);
+    handleWorkspaceKey(state, "", { downArrow: true } as Key);
+    expect(state.setScrollOffset).toHaveBeenCalledTimes(2);
+    expect(state.controller.history).not.toHaveBeenCalled();
+    expect(state.setInput).not.toHaveBeenCalled();
+
+    handleWorkspaceKey(state, "p", { ctrl: true } as Key);
+    expect(state.controller.history).toHaveBeenCalledWith("previous");
   });
 });

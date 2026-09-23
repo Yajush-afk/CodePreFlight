@@ -48,6 +48,7 @@ class CacheSettings(ConfigModel):
 class ScanSettings(ConfigModel):
     batch_characters: int | None = Field(default=None, ge=4_000, le=500_000)
     max_file_bytes: int | None = Field(default=None, ge=1_000, le=5_000_000)
+    max_parallel_requests: int | None = Field(default=None, ge=1, le=2)
 
 
 class GitSettings(ConfigModel):

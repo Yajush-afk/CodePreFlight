@@ -1,5 +1,7 @@
 import json
+import time
 from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +23,138 @@ def test_long_source_lines_are_excluded_with_manifest_reason(git_repository: Pat
         item["path"] == "long.py" and "batch budget" in item["reason"]
         for item in inventory["files"]
     )
+
+
+def test_lockfiles_are_excluded_and_source_is_grouped_with_its_tests(
+    git_repository: Path,
+) -> None:
+    for directory in ("engine/src/codepreflight_engine", "engine/tests"):
+        (git_repository / directory).mkdir(parents=True)
+    files = {
+        "engine/src/codepreflight_engine/alpha.py": "def alpha():\n    return True\n",
+        "engine/tests/test_alpha.py": "def test_alpha():\n    assert True\n",
+        "engine/src/codepreflight_engine/zeta.py": "def zeta():\n    return False\n",
+        "engine/tests/test_zeta.py": "def test_zeta():\n    assert True\n",
+        "engine/uv.lock": "[[package]]\nname = 'demo'\n" * 300,
+    }
+    for relative, content in files.items():
+        (git_repository / relative).write_text(content, encoding="utf-8")
+    git(git_repository, "add", ".")
+    planner = ScanPlanner()
+    inventory = planner._inventory(git_repository, {}, 120)
+    assert "engine/uv.lock" not in inventory["selected"]
+    assert any(
+        item["path"] == "engine/uv.lock" and "lockfile" in item["reason"]
+        for item in inventory["files"]
+    )
+    batches = planner._batches(inventory["selected"], 120)
+    combined = "\n".join(batches)
+    assert combined.index("alpha.py") < combined.index("test_alpha.py") < combined.index("zeta.py")
+
+
+def test_verified_scan_uses_one_provider_call_per_uncached_batch(
+    git_repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synchronized_repository(git_repository, tmp_path)
+    adapter = FakeProviderAdapter(json.dumps({"summary": "one batch", "findings": []}))
+    install_adapter(monkeypatch, adapter, git_repository)
+    preview = ScanPlanner().plan(git_repository, {"provider": "fake"})
+    result = ScanExecutor().execute(
+        git_repository,
+        {"provider": "fake"},
+        preview["fingerprint"],
+        approved=True,
+        emit=lambda *args: None,
+    )
+    assert len(adapter.requests) == result["manifest"]["batches"]
+    assert result["manifest"]["providerRequests"] == result["manifest"]["batches"]
+    assert "Full repository scan" in result["summary"]
+
+
+def test_scan_limits_parallel_requests_and_reports_both_active_batches(
+    git_repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (git_repository / ".codepreflight.toml").write_text(
+        "[scan]\nmax_parallel_requests = 2\n", encoding="utf-8"
+    )
+    for index in range(8):
+        (git_repository / f"module_{index}.py").write_text(
+            f"def module_{index}():\n    return '{'a' * 35}'\n", encoding="utf-8"
+        )
+    git(git_repository, "add", ".")
+    git(git_repository, "commit", "-m", "Add parallel scan fixture")
+    synchronized_repository(git_repository, tmp_path)
+    lock = Lock()
+    active = maximum = 0
+
+    def respond(prompt: str, schema: dict[str, object]) -> str:
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return json.dumps({"summary": "batch checked", "findings": []})
+
+    adapter = FakeProviderAdapter(respond)
+    install_adapter(monkeypatch, adapter, git_repository)
+    preview = ScanPlanner().plan(git_repository, {"provider": "fake", "batchCharacters": 120})
+    assert preview["parallel"] == 2
+    assert len(preview["batches"]) > 1
+    events: list[tuple[str, dict[str, object]]] = []
+    result = ScanExecutor().execute(
+        git_repository,
+        {"provider": "fake", "batchCharacters": 120},
+        preview["fingerprint"],
+        approved=True,
+        emit=lambda event, payload: events.append((event, payload)),
+    )
+    assert maximum == 2
+    assert result["manifest"]["parallelRequests"] == 2
+    assert len(adapter.requests) == result["manifest"]["batches"]
+    assert any(
+        len(payload.get("activeBatches", [])) == 2
+        for event, payload in events
+        if event == "scan_progress"
+    )
+
+
+def test_rate_limit_downgrades_remaining_scan_work_to_one_request(
+    git_repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (git_repository / ".codepreflight.toml").write_text(
+        "[scan]\nmax_parallel_requests = 2\n", encoding="utf-8"
+    )
+    for index in range(4):
+        (git_repository / f"module_{index}.py").write_text(
+            f"def module_{index}():\n    return True\n", encoding="utf-8"
+        )
+    git(git_repository, "add", ".")
+    git(git_repository, "commit", "-m", "Add rate limit fixture")
+    synchronized_repository(git_repository, tmp_path)
+    first = True
+
+    def respond(prompt: str, schema: dict[str, object]) -> str:
+        nonlocal first
+        if first:
+            first = False
+            raise CodePreflightError("provider_rate_limited", "synthetic concurrency limit")
+        return json.dumps({"summary": "batch checked", "findings": []})
+
+    adapter = FakeProviderAdapter(respond)
+    install_adapter(monkeypatch, adapter, git_repository)
+    preview = ScanPlanner().plan(git_repository, {"provider": "fake", "batchCharacters": 120})
+    assert len(preview["batches"]) > 1
+    result = ScanExecutor().execute(
+        git_repository,
+        {"provider": "fake", "batchCharacters": 120},
+        preview["fingerprint"],
+        approved=True,
+        emit=lambda *args: None,
+    )
+    assert result["status"] == "completed"
+    assert len(adapter.requests) == len(preview["batches"]) + 1
 
 
 def test_executor_requires_explicit_approval(git_repository: Path) -> None:

@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -36,10 +37,13 @@ from .scan import FullScanOrchestrator
 from .trust import is_trusted
 from .workspace import RepositoryWorkspace
 
+_emit_lock = threading.Lock()
+
 
 def emit(event: EngineEvent) -> None:
-    sys.stdout.write(event.model_dump_json(exclude_none=True, by_alias=True) + "\n")
-    sys.stdout.flush()
+    with _emit_lock:
+        sys.stdout.write(event.model_dump_json(exclude_none=True, by_alias=True) + "\n")
+        sys.stdout.flush()
 
 
 def complete(request_id: str, payload: dict[str, Any]) -> None:

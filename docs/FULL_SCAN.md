@@ -13,6 +13,13 @@ Cached results require the same explicit approval. In the TUI the confirmation c
 the fingerprint automatically. Check commands run once, after approval, on a cache miss.
 
 Request counts are estimates: malformed structured output can require repair requests.
+Review batches group related source and test files by subsystem. Common lockfiles are excluded
+from provider context and recorded in the manifest. The preview shows the exact selected file
+paths and line ranges for each batch. Codex CLI defaults to at most two concurrent batch requests;
+other providers default to one. Set `scan.max_parallel_requests` to 1 or 2 to override. A rate-limit
+response reduces the remaining work to one request at a time. Completed batches can be reused
+from the matching local cache. The final summary is assembled locally from verified findings and
+check results, without an additional provider synthesis request.
 Synchronization uses local tracking references, without automatically fetching.
 Scan operations never authenticate, log out, change provider settings, or switch branches.
 
@@ -28,6 +35,8 @@ emits a content-free heartbeat every five seconds. The terminal applies a four-m
 watchdog that resets on real engine progress or a provider heartbeat; it is not an overall scan
 duration limit. Escape cancellation still terminates the engine process group.
 
-Progress text comes from actual scan stages, batch numbers, selected source paths, cache reuse,
-and evidence verification. Supporting copy is deterministic and consumes no provider tokens.
-CodePreFlight does not present invented model thoughts or hidden provider tool activity.
+Progress text reports what Preflight actually did: scan stages, active batch numbers, exact selected
+source paths, cache reuse, and evidence verification. A locally updated one-second timer is shown
+without generating provider requests. `/activity` shows sanitized Preflight-run commands; provider-
+internal file reads or commands cannot be observed and are not claimed. There are no invented model
+thoughts or provider-personality messages.

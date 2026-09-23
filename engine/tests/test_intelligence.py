@@ -198,3 +198,47 @@ def test_remote_question_discloses_context_before_requesting_consent(
     assert error.value.code == "provider_consent_required"
     assert events[0][0] == "consent_required"
     assert events[0][1]["manifest"]["total_characters"] > 0  # type: ignore[index]
+
+
+def test_full_scan_finding_follow_up_uses_review_evidence_without_staged_changes(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("def validate(token):\n    return bool(token)\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    git(git_repository, "commit", "-m", "Add validation")
+    adapter = HistoryAdapter(git(git_repository, "rev-parse", "HEAD").strip(), answer_mode=True)
+    registry = SimpleNamespace(adapter=lambda provider_id: adapter)
+    monkeypatch.setattr(
+        "codepreflight_engine.intelligence.ProviderRegistry", lambda config: registry
+    )
+
+    result = RepositoryIntelligence().run(
+        git_repository,
+        {
+            "mode": "ask",
+            "target": "review",
+            "question": "How should we fix finding 2?",
+            "provider": "fake",
+            "reviewContext": {
+                "target": "full",
+                "summary": "The repository was scanned.",
+                "findings": [
+                    {
+                        "id": "finding-2",
+                        "index": 2,
+                        "title": "Empty tokens pass validation",
+                        "explanation": "The validator accepts whitespace.",
+                        "verification": "verified",
+                        "evidence": [{"path": "feature.py", "start_line": 2}],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result["result"]["answer"]
+    assert "Empty tokens pass validation" in adapter.prompts[0]
+    assert "Selected finding 2" in adapter.prompts[0]
+    assert "feature.py lines" in adapter.prompts[0]
+    assert "return bool(token)" in adapter.prompts[0]
