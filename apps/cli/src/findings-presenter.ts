@@ -24,7 +24,7 @@ export class FindingsPresenter {
     const count = (severity: string): number =>
       findings.filter((item) => item.severity === severity).length;
     const verified = findings.filter(
-      (item) => item.verification !== "verified",
+      (item) => item.verification === "verified",
     ).length;
     const partial = findings.filter(
       (item) => item.verification === "partially_verified",
