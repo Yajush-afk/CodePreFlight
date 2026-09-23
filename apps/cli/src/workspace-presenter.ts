@@ -4,6 +4,11 @@ import type {
   SessionOverlayItem,
 } from "./session-controller.js";
 
+export interface TranscriptLine {
+  text: string;
+  code: boolean;
+}
+
 export class WorkspacePresenter {
   scanApproval(manifest: Record<string, unknown>): string {
     const files = (manifest.files ?? []) as Array<Record<string, unknown>>;
@@ -86,30 +91,41 @@ export class WorkspacePresenter {
     width: number,
     height: number,
     offset = 0,
-  ): string[] {
+  ): TranscriptLine[] {
     const lines = entries.flatMap((entry) => {
       const prefix =
         entry.kind === "user" ? "You › " : entry.kind === "error" ? "× " : "";
+      let fenced = false;
+      const body = entry.body.split("\n").flatMap((line) => {
+        if (line.trim().startsWith("```")) {
+          fenced = !fenced;
+          return [];
+        }
+        return [
+          { text: !entry.title ? `${prefix}${line}` : line, code: fenced },
+        ];
+      });
       return [
-        entry.title ? `${prefix}${entry.title}` : undefined,
-        ...entry.body
-          .split("\n")
-          .map((line) => (!entry.title ? `${prefix}${line}` : line)),
-        "",
-      ].filter((line): line is string => line !== undefined);
+        ...(entry.title
+          ? [{ text: `${prefix}${entry.title}`, code: false }]
+          : []),
+        ...body,
+        { text: "", code: false },
+      ];
     });
     const wrapped = lines.flatMap((line) => {
-      if (!line) return [""];
-      const chunks: string[] = [];
-      const characters = Array.from(line);
+      if (!line.text) return [line];
+      const chunks: TranscriptLine[] = [];
+      const characters = Array.from(line.text);
       for (
         let index = 0;
         index < characters.length;
         index += Math.max(10, width)
       )
-        chunks.push(
-          characters.slice(index, index + Math.max(10, width)).join(""),
-        );
+        chunks.push({
+          text: characters.slice(index, index + Math.max(10, width)).join(""),
+          code: line.code,
+        });
       return chunks;
     });
     const end = Math.max(height, wrapped.length - offset);
