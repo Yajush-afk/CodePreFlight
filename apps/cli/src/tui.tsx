@@ -21,6 +21,7 @@ import { WorkingIndicator } from "./working-indicator.js";
 import { GitGraphView } from "./git-graph-view.js";
 import { GitGraphPresenter } from "./git-graph-presenter.js";
 import { ScanActivityPresenter } from "./scan-activity-presenter.js";
+import { TerminalMarkdown, TerminalMarkdownLine } from "./terminal-markdown.js";
 
 interface AppProps {
   repositoryPath: string;
@@ -174,16 +175,30 @@ export function SessionView({
               <Text bold color={accent}>
                 {overlay.title}
               </Text>
-              {overlay.body && (
-                <Text>
-                  {presenter.viewport(
-                    overlay.body,
-                    terminalWidth - 4,
-                    Math.max(2, bodyHeight - (overlay.items?.length ? 10 : 3)),
-                    scrollOffset,
-                  )}
-                </Text>
-              )}
+              {overlay.body &&
+                (overlay.kind === "finding" ? (
+                  <TerminalMarkdown
+                    value={overlay.body}
+                    height={Math.max(
+                      2,
+                      bodyHeight - (overlay.items?.length ? 10 : 3),
+                    )}
+                    offset={scrollOffset}
+                    colorEnabled={colorEnabled}
+                  />
+                ) : (
+                  <Text>
+                    {presenter.viewport(
+                      overlay.body,
+                      terminalWidth - 4,
+                      Math.max(
+                        2,
+                        bodyHeight - (overlay.items?.length ? 10 : 3),
+                      ),
+                      scrollOffset,
+                    )}
+                  </Text>
+                ))}
               {overlay.items?.length ? (
                 <SelectInput
                   key={overlay.title}
@@ -209,20 +224,23 @@ export function SessionView({
           ) : (
             lines.map((line, index) => {
               const severity = Object.keys(SEVERITY_COLORS).find((value) =>
-                line.includes(value),
+                line.text.includes(value),
               );
-              return (
+              return severity ? (
                 <Text
                   key={index}
                   wrap="truncate-end"
-                  color={
-                    colorEnabled && severity
-                      ? SEVERITY_COLORS[severity]
-                      : undefined
-                  }
+                  color={colorEnabled ? SEVERITY_COLORS[severity] : undefined}
                 >
-                  {line || " "}
+                  {line.text || " "}
                 </Text>
+              ) : (
+                <TerminalMarkdownLine
+                  key={index}
+                  value={line.text || " "}
+                  code={line.code}
+                  colorEnabled={colorEnabled}
+                />
               );
             })
           )}

@@ -70,18 +70,22 @@ export class FindingsPresenter {
       )
       .join("\n");
     return [
-      `#${index} · ${String(finding.severity ?? "info").toUpperCase()} · ${finding.verification ?? "unverified"} · confidence ${finding.confidence ?? "unspecified"}`,
-      finding.title ?? "Finding",
+      `**#${index}** · **${String(finding.severity ?? "info").toUpperCase()}** · ${finding.verification ?? "unverified"} · confidence ${finding.confidence ?? "unspecified"}`,
+      `# ${finding.title ?? "Finding"}`,
       "",
-      `What happened\n${finding.explanation ?? "No explanation supplied."}`,
-      `Why it matters\n${finding.impact ?? "No impact supplied."}`,
-      `Evidence\n${locations || "No location supplied."}`,
-      `What to inspect\n${finding.recommendation ?? "Inspect the cited code."}`,
+      `## What happened\n${finding.explanation ?? "No explanation supplied."}`,
+      `## Why it matters\n${finding.impact ?? "No impact supplied."}`,
+      `## Evidence\n${locations || "No location supplied."}`,
+      `## What to inspect\n${finding.recommendation ?? "Inspect the cited code."}`,
       ...(finding.suggested_tests?.length
-        ? [`Suggested tests\n${finding.suggested_tests.join("\n")}`]
+        ? [
+            `## Suggested tests\n${finding.suggested_tests.map((test) => `- ${test}`).join("\n")}`,
+          ]
         : []),
       ...(finding.verification_notes?.length
-        ? [`Verification notes\n${finding.verification_notes.join("\n")}`]
+        ? [
+            `## Verification notes\n${finding.verification_notes.map((note) => `- ${note}`).join("\n")}`,
+          ]
         : []),
       "",
       "Ask a follow-up below, or press Esc to return to the transcript.",

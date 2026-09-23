@@ -19,4 +19,15 @@ describe("FindingsPresenter", () => {
 
     expect(summary).toContain("1 verified · 1 partially verified");
   });
+
+  it("builds semantic terminal markdown for finding details", () => {
+    const detail = new FindingsPresenter().detail(1, {
+      ...finding("verified"),
+      explanation: "Validation was removed.",
+      suggested_tests: ["Reject an expired token"],
+    });
+    expect(detail).toContain("# Example finding");
+    expect(detail).toContain("## What happened");
+    expect(detail).toContain("- Reject an expired token");
+  });
 });
