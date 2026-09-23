@@ -83,7 +83,9 @@ Ctrl+C explicitly exits the session. PgUp/PgDn scroll transcript or preview deta
 
 - Manual runs no automatic AI reviews. Optional pre-commit staged review remains independent.
 - Auto detects new or changed open pull requests on session launch, refresh, post-commit, and
-  pre-push events.
+  pre-push events. While the TUI remains open, it also performs a throttled read-only GitHub check
+  from the existing job observer, so a newly created PR is discovered without restarting the
+  session. No background daemon or automatic fetch is introduced.
 - Auto+ also queues a fast review for each commit and runs a synchronous branch review before
   push. Post-commit work never blocks or reverses a commit.
 

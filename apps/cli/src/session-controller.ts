@@ -183,6 +183,7 @@ interface AutomationView {
 type Listener = (state: SessionState) => void;
 type Retry = () => Promise<void>;
 type ProviderLogin = (provider: string) => Promise<void>;
+const AUTO_PR_DISCOVERY_INTERVAL_MS = 10_000;
 
 export class SessionController {
   private currentState: SessionState = {
@@ -216,6 +217,7 @@ export class SessionController {
   private scanProgress?: ScanProgressView;
   private pollTimer?: NodeJS.Timeout;
   private polling = false;
+  private lastPrDetectionAt = 0;
   private disposed = false;
   private readonly seenJobs = new Set<string>();
   private readonly commandHistory: string[] = [];
@@ -1083,6 +1085,7 @@ export class SessionController {
 
   private async observeAutomationEvent(
     event: "launch" | "refresh",
+    quiet = false,
   ): Promise<void> {
     try {
       const response = await this.engine.request(
@@ -1092,12 +1095,22 @@ export class SessionController {
       );
       const job = response.job as Record<string, unknown> | undefined;
       const pr = response.prDetection as Record<string, unknown> | undefined;
+      this.lastPrDetectionAt = Date.now();
       this.updatePullRequestHeader(pr);
       if (job?.id && job.status === "queued" && !job.coalesced) {
-        void this.runAutomationJob(String(job.id));
+        const detected = `${String(job.id)}:detected`;
+        if (!this.seenJobs.has(detected)) {
+          this.seenJobs.add(detected);
+          this.append({
+            kind: "status",
+            title: "Pull request detected",
+            body: `PR #${String(pr?.number ?? "unknown")} · automatic review queued`,
+          });
+          void this.runAutomationJob(String(job.id));
+        }
       }
     } catch (error) {
-      if ((this.automation.mode ?? "manual") !== "manual") {
+      if (!quiet && (this.automation.mode ?? "manual") !== "manual") {
         this.appendError(error);
       }
     }
@@ -1160,6 +1173,12 @@ export class SessionController {
         { action: "status" },
       )) as AutomationView;
       this.appendAutomationUpdates();
+      if (
+        (this.automation.mode === "auto" ||
+          this.automation.mode === "auto_plus") &&
+        Date.now() - this.lastPrDetectionAt >= AUTO_PR_DISCOVERY_INTERVAL_MS
+      )
+        await this.observeAutomationEvent("refresh", true);
       if (!this.currentState.busy) await this.refreshGraph(true);
     } catch {
       // Polling remains quiet; explicit /jobs surfaces actionable failures.
