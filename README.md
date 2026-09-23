@@ -40,6 +40,7 @@ preflight status
 preflight provider list
 preflight provider use codex --write
 preflight review --staged
+preflight review --working
 preflight review --commit HEAD
 preflight review --branch
 preflight review --merged-pr 123
@@ -70,7 +71,7 @@ checks actually run from tests merely recommended.
 Each finding includes severity, confidence, evidence, verification state, impact, and a
 recommended action. Running `preflight` opens a fullscreen, ephemeral repository session with a
 persistent composer, guided setup, and a display-only local commit graph. Use `/files`,
-`/branches`, `/commits`, `/review`, `/reviewcommit <revision>`, `/reviewbranch`, `/reviewpr`,
+`/branches`, `/commits`, `/review`, `/reviewworking`, `/reviewcommit <revision>`, `/reviewbranch`, `/reviewpr`,
 `/reviewmergedpr <number-or-url>`,
 `/mode`, `/scanfull`, `/findings`, and `/help`; plain-language questions stay
 scoped to repository, Git, review, and history evidence. After a review, `/findings` opens a

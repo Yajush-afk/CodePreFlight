@@ -355,6 +355,23 @@ describe("SessionController", () => {
     expect(controller.state.transcript.at(-1)?.title).toBe("Repository status");
   });
 
+  it("routes working-tree review without staging or committing", async () => {
+    const engine = new FakeEngine();
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+
+    await controller.submit("/reviewworking");
+
+    expect(engine.requests.at(-1)).toMatchObject({
+      command: "review",
+      payload: { target: "working" },
+    });
+    expect(controller.state.pendingDecision?.title).toContain("Send context");
+  });
+
   it("lists and reviews a selected merged pull request", async () => {
     const engine = new FakeEngine();
     const controller = new SessionController({

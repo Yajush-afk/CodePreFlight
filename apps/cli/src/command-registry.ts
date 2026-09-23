@@ -33,6 +33,7 @@ const DEFINITIONS: Array<[string, string, string?]> = [
   ["clear", "Clear conversation"],
   ["quit", "Exit"],
   ["reviewstaged", "Review staged changes"],
+  ["reviewworking", "Review all uncommitted changes"],
   ["reviewbranch", "Review the branch"],
   ["reviewcommit", "Review a reachable commit", "commit"],
   ["reviewpr", "Deep PR review"],
