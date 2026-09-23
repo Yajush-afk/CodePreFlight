@@ -19,7 +19,7 @@ const DEFINITIONS: Array<[string, string, string?]> = [
   ["branches", "Browse local branches"],
   ["commits", "Browse reachable commits"],
   ["review", "Choose what to review"],
-  ["findings", "Explore findings in the active review"],
+  ["findings", "Explore findings in the active review", "filter"],
   ["scanfull", "Preview a full scan of the clean base branch"],
   ["provider", "Set up your reviewer"],
   ["model", "Choose review model"],

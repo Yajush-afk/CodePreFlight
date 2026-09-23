@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Key } from "ink";
-import { handleWorkspaceKey, type WorkspaceInput } from "./workspace-input.js";
+import {
+  handleWorkspaceKey,
+  sanitizeComposerInput,
+  type WorkspaceInput,
+} from "./workspace-input.js";
 
 function context(overrides: Partial<WorkspaceInput> = {}): WorkspaceInput {
   return {
@@ -18,6 +22,7 @@ function context(overrides: Partial<WorkspaceInput> = {}): WorkspaceInput {
     suggestionsLoading: false,
     terminalHandoff: false,
     setInput: vi.fn(),
+    replaceInput: vi.fn(),
     setSuggestions: vi.fn(),
     setSuggestionsDismissed: vi.fn(),
     setSuggestionIndex: vi.fn(),
@@ -69,5 +74,29 @@ describe("workspace keyboard priority", () => {
 
     handleWorkspaceKey(state, "p", { ctrl: true } as Key);
     expect(state.controller.history).toHaveBeenCalledWith("previous");
+    expect(state.replaceInput).toHaveBeenCalledWith("/scanfull");
+  });
+  it("completes suggestions through the cursor-aware replacement boundary", () => {
+    const state = context({
+      input: "/fi",
+      suggestions: [
+        {
+          value: "findings",
+          label: "/findings",
+          completion: "/findings",
+        },
+      ],
+    });
+    handleWorkspaceKey(state, "", { tab: true } as Key);
+    expect(state.replaceInput).toHaveBeenCalledWith("/findings");
+    expect(state.setInput).not.toHaveBeenCalled();
+  });
+});
+
+describe("composer sanitization", () => {
+  it("removes terminal control characters before they reach session input", () => {
+    expect(sanitizeComposerInput("\u007f\u0008review auth\u0000")).toBe(
+      "review auth",
+    );
   });
 });

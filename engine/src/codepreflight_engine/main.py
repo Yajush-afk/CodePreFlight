@@ -33,11 +33,13 @@ from .pull_request import prepare_pull_request
 from .readiness import ProviderHealth, review_readiness
 from .repository import RepositoryInspector
 from .review import ReviewOrchestrator
+from .runtime_identity import RuntimeIdentity
 from .scan import FullScanOrchestrator
 from .trust import is_trusted
 from .workspace import RepositoryWorkspace
 
 _emit_lock = threading.Lock()
+_runtime_identity = RuntimeIdentity.capture()
 
 
 def emit(event: EngineEvent) -> None:
@@ -507,6 +509,14 @@ def handle_line(line: str) -> None:
             command = raw_command if raw_command in ENGINE_COMMANDS else "invalid"
             repository_path = str(raw.get("repositoryPath", ""))
         request = EngineRequest.model_validate(raw)
+        if _runtime_identity.changed():
+            raise CodePreflightError(
+                "runtime_changed_restart_required",
+                "CodePreflight changed while this session was open. Exit the TUI, "
+                "rebuild if you changed source files, and launch preflight again.",
+                recoverable=True,
+                details={"actions": [{"type": "restart_preflight"}]},
+            )
         with activity_scope(
             lambda event, payload: request_event(request.requestId, event, payload)
         ):
@@ -583,6 +593,7 @@ def main() -> None:
                 "engineVersion": "0.1.0",
                 "protocolVersion": PROTOCOL_VERSION,
                 "processId": os.getpid(),
+                "runtime": _runtime_identity.public(),
             },
         )
     )
