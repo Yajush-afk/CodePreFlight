@@ -79,3 +79,24 @@ def test_process_provider_emits_content_free_heartbeats(tmp_path: Path) -> None:
     assert len(heartbeats) >= 2
     assert all(event == "progress" for event, payload in events if payload in heartbeats)
     assert all("prompt" not in payload for payload in heartbeats)
+
+
+def test_process_schema_rejection_is_reported_without_raw_provider_error(
+    tmp_path: Path,
+) -> None:
+    raw_error = (
+        'ERROR: {"code":"invalid_json_schema","message":"Invalid schema. Missing \'line\'."}'
+    )
+    command = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write(sys.argv[1]); sys.exit(1)",
+        raw_error,
+    ]
+
+    with pytest.raises(CodePreflightError) as error:
+        run_provider_process(command, prompt="synthetic question", cwd=tmp_path, timeout=1)
+
+    assert error.value.code == "provider_schema_rejected"
+    assert "Missing 'line'" not in str(error.value)
+    assert "No answer was produced" in str(error.value)

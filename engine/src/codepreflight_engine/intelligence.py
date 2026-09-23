@@ -15,6 +15,7 @@ from .config import load_config
 from .context import ContextBuilder
 from .conversation_context import ConversationContext
 from .errors import CodePreflightError
+from .finding_schema import strict_provider_schema
 from .git import GitRunner
 from .models import (
     ExplanationEvidence,
@@ -320,7 +321,7 @@ class RepositoryIntelligence:
     def _invoke(
         self, adapter: Any, prompt: str, model: type[StructuredResponse]
     ) -> StructuredResponse:
-        output = adapter.review(prompt, model.model_json_schema())
+        output = adapter.review(prompt, strict_provider_schema(model))
         candidates = [output.strip()]
         fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", output, re.DOTALL)
         if fenced:

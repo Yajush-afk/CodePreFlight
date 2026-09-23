@@ -86,7 +86,13 @@ def run_provider_process(
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "provider command failed"
         lowered = detail.lower()
-        if any(marker in lowered for marker in ("unauthorized", "authentication", "log in")):
+        if "invalid_json_schema" in lowered or "invalid schema for response_format" in lowered:
+            code = "provider_schema_rejected"
+            detail = (
+                "The provider rejected Preflight's structured response format. "
+                "No answer was produced; update Preflight and retry."
+            )
+        elif any(marker in lowered for marker in ("unauthorized", "authentication", "log in")):
             code = "provider_authentication_failed"
         elif any(marker in lowered for marker in ("rate limit", "too many requests", "quota")):
             code = "provider_rate_limited"

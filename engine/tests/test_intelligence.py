@@ -39,10 +39,12 @@ class HistoryAdapter:
         self.commit = commit
         self.answer_mode = answer_mode
         self.prompts: list[str] = []
+        self.schemas: list[dict[str, object]] = []
         self.descriptor = ExplanationAdapter.descriptor
 
     def review(self, prompt: str, schema: dict[str, object]) -> str:
         self.prompts.append(prompt)
+        self.schemas.append(schema)
         if self.answer_mode:
             return json.dumps(
                 {
@@ -242,3 +244,5 @@ def test_full_scan_finding_follow_up_uses_review_evidence_without_staged_changes
     assert "Selected finding 2" in adapter.prompts[0]
     assert "feature.py lines" in adapter.prompts[0]
     assert "return bool(token)" in adapter.prompts[0]
+    evidence_schema = adapter.schemas[0]["$defs"]["ExplanationEvidence"]
+    assert evidence_schema["required"] == ["path", "line", "commit"]

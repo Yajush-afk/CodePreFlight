@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .errors import CodePreflightError
 from .models import ProviderReviewResponse
 
 
 def provider_output_schema() -> dict[str, object]:
-    schema = ProviderReviewResponse.model_json_schema()
+    return strict_provider_schema(ProviderReviewResponse)
+
+
+def strict_provider_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """Normalize a Pydantic schema for providers requiring strict JSON output."""
+    schema = model.model_json_schema()
     _make_strict_provider_schema(schema)
     return schema
 
