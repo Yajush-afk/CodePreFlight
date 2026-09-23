@@ -41,6 +41,8 @@ class FakeEngine implements SessionEngine {
   requestOptions: EngineRequestOptions[] = [];
   reviewApproved = false;
   automationMode = "manual";
+  prFound = true;
+  enqueueDetectedPr = false;
   scanFindings: Array<Record<string, unknown>> = [];
 
   async request(
@@ -105,11 +107,35 @@ class FakeEngine implements SessionEngine {
               mode: this.automationMode,
               action: "detect_pr",
               prDetection: {
-                found: true,
+                found: this.prFound,
                 number: 42,
                 reviewFingerprintCurrent: false,
               },
+              ...(this.prFound && this.enqueueDetectedPr
+                ? {
+                    job: {
+                      id: "detected-pr-job",
+                      status: "queued",
+                      coalesced: false,
+                    },
+                  }
+                : {}),
             };
+      }
+      if (payload.action === "worker") {
+        return {
+          job: {
+            id: payload.jobId,
+            status: "completed",
+            target: "pull_request",
+          },
+          result: {
+            status: "completed",
+            summary: "Automatic PR review complete.",
+            findings: [],
+            blocking: false,
+          },
+        };
       }
       if (payload.action === "configure") {
         return {
@@ -337,6 +363,44 @@ describe("SessionController", () => {
     await controller.start();
 
     expect(controller.state.header?.pullRequest).toBe("#42 · review due");
+  });
+
+  it("detects a PR created after launch and starts its Auto review", async () => {
+    const engine = new FakeEngine();
+    engine.automationMode = "auto";
+    engine.prFound = false;
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+    engine.prFound = true;
+    engine.enqueueDetectedPr = true;
+    (controller as unknown as { lastPrDetectionAt: number }).lastPrDetectionAt =
+      0;
+
+    await (
+      controller as unknown as { pollAutomationJobs(): Promise<void> }
+    ).pollAutomationJobs();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const workers = () =>
+      engine.requests.filter(
+        (request) =>
+          request.command === "automation" &&
+          request.payload.action === "worker" &&
+          request.payload.jobId === "detected-pr-job",
+      );
+    expect(workers()).toHaveLength(1);
+    expect(controller.state.header?.pullRequest).toBe("#42 · review due");
+
+    (controller as unknown as { lastPrDetectionAt: number }).lastPrDetectionAt =
+      0;
+    await (
+      controller as unknown as { pollAutomationJobs(): Promise<void> }
+    ).pollAutomationJobs();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(workers()).toHaveLength(1);
   });
 
   it("routes slash commands without using repository chat", async () => {
