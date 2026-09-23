@@ -103,6 +103,45 @@ describe("SessionView", () => {
     expect(frame).toContain("explain finding 1");
   });
 
+  it("renders elapsed scan time from the local clock between engine heartbeats", () => {
+    const state = {
+      started: true,
+      busy: true,
+      shouldExit: false,
+      transcript: [],
+      scanProgress: {
+        stage: "review",
+        status: "started",
+        batch: 2,
+        batches: 7,
+        sources: ["engine/src/review.py:1-90"],
+      },
+      scanBatchStartedAt: 10_000,
+    };
+    const first = render(
+      <SessionView
+        state={state}
+        input=""
+        onInput={() => {}}
+        onSubmit={() => {}}
+        now={11_000}
+      />,
+    );
+    const second = render(
+      <SessionView
+        state={state}
+        input=""
+        onInput={() => {}}
+        onSubmit={() => {}}
+        now={12_000}
+      />,
+    );
+    expect(first.lastFrame()).toContain("1s elapsed");
+    expect(second.lastFrame()).toContain("2s elapsed");
+    first.unmount();
+    second.unmount();
+  });
+
   it("renders a focused selectable repository overlay", () => {
     const view = render(
       <SessionView

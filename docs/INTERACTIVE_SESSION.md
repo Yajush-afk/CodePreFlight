@@ -29,6 +29,7 @@ permanent “onboarding completed” flag.
 /reviewcommit <revision>
 /reviewbranch
 /reviewpr
+/findings
 /pr
 /provider
 /providerlogin <provider>
@@ -50,8 +51,11 @@ permanent “onboarding completed” flag.
 ```
 
 Slash commands route deterministically. Plain text is sent only as a repository-scoped question,
-such as “What changed on this branch?”, “Explain finding 2”, or “Which tests should I run?”. The
-provider receives locally gathered evidence; adapters constrain editing and shell tools.
+such as “What changed on this branch?”, “Explain findings 2, 3 and 4”, or “Which tests should I run?”.
+After a review, questions use the active review and selected finding evidence even when the index
+is clean. The provider can explain possible fixes but cannot edit files. Changing branches clears
+that review context. The provider receives locally gathered evidence; adapters constrain editing
+and shell tools.
 Preflight reports only tool operations it can actually observe.
 
 `/model` opens the active provider's discoverable standard-tier models. Fast-tier aliases are not
@@ -63,7 +67,10 @@ session.
 Typing `/` opens fuzzy suggestions above the composer; `/mo` ranks model before mode.
 Commands requiring an argument offer contextual commits, branches, providers or paths.
 Arrows select, Tab completes without execution, Enter selects/runs, and Escape dismisses.
-With no suggestion menu, Up/Down navigate ephemeral command history.
+With no suggestion menu and an empty composer, Up/Down scroll the transcript. Ctrl+P/Ctrl+N
+navigate ephemeral command history. PgUp/PgDn scroll by page. `/findings` opens a severity-sorted,
+scrollable list; select a finding for its evidence, impact, verification and suggested tests,
+then ask a follow-up from the composer.
 
 Escape closes suggestions, then overlays, then clears composer text, then cancels a pending
 decision. With none of those active it stops local work immediately. During provider work,

@@ -29,12 +29,14 @@ model, revision, check output, context size, and verification state.
 5. Open `/commits`, select a commit, and explain first-parent semantics when relevant.
 6. Type `/mo` to show model suggestions; use `/reviewstaged` and show the pipeline,
    transmission disclosure, checks, and verification. Open `/activity` for sanitized command outcomes.
-7. Open a finding and ask “Explain finding 1” and “Which tests should I run?”.
+7. Open `/findings`, select a finding, and ask “Explain findings 1 and 2” and “Which tests should I run?”.
+   Show that the conversation uses the completed review even when nothing is staged.
 8. Open `/mode` and explain Manual, Auto, and Auto+ without enabling unwanted hooks in the demo
    repository.
 9. In a GitHub-backed branch, run `/pr` and `/reviewpr` to show detection and deep review.
 10. In a separate clean synchronized base-branch repository, run `/scanfull`; pause on the dedicated
-    manifest and confirmation before approving.
+    manifest and confirmation before approving. Show exact batch paths, one-second elapsed time,
+    sanitized Preflight commands in `/activity`, and the scrollable findings explorer afterward.
 11. Finish with one recoverable failure: missing Ollama model, missing repository trust, or missing
     automation grant.
 

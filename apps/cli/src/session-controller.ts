@@ -6,13 +6,18 @@ import {
   type EngineRequestOptions,
 } from "./engine-client.js";
 import type { EngineCommand, EngineEvent } from "./protocol.js";
-import { ActivityStore, type OperationRecord } from "./activity-store.js";
+import {
+  ActivityStore,
+  describeRecentOperation,
+  type OperationRecord,
+} from "./activity-store.js";
 import { CommandRegistry, type Suggestion } from "./command-registry.js";
 import { SuggestionCoordinator } from "./suggestion-coordinator.js";
 import { OnboardingCoordinator } from "./onboarding-coordinator.js";
 import { WorkflowCoordinator } from "./workflow-coordinator.js";
 import { GitGraphPresenter, type GitGraph } from "./git-graph-presenter.js";
 import { WorkspacePresenter } from "./workspace-presenter.js";
+import { FindingsPresenter, type FindingView } from "./findings-presenter.js";
 import {
   ScanActivityPresenter,
   type ScanProgressView,
@@ -85,13 +90,22 @@ export interface SessionAction {
     | "branch"
     | "commit"
     | "review"
+    | "finding"
     | "setup"
     | "close";
   value: string;
 }
 
 export interface SessionOverlay {
-  kind: "tree" | "branches" | "commits" | "providers" | "preview" | "help";
+  kind:
+    | "tree"
+    | "branches"
+    | "commits"
+    | "providers"
+    | "preview"
+    | "help"
+    | "findings"
+    | "finding";
   title: string;
   items?: SessionOverlayItem[];
   body?: string;
@@ -105,6 +119,9 @@ export interface SessionState {
   interruptionNotice?: string;
   header?: SessionHeader;
   graph?: GitGraph;
+  scanProgress?: ScanProgressView;
+  scanBatchStartedAt?: number;
+  recentOperation?: string;
   transcript: TranscriptEntry[];
   pendingDecision?: PendingDecision;
   overlay?: SessionOverlay;
@@ -148,16 +165,7 @@ interface ProviderView {
   kind?: string;
 }
 
-interface ReviewFinding {
-  id?: string;
-  severity?: string;
-  title?: string;
-  explanation?: string;
-  impact?: string;
-  verification?: string;
-  recommendation?: string;
-  evidence?: Array<{ path?: string; start_line?: number; end_line?: number }>;
-}
+type ReviewFinding = FindingView;
 
 interface ReviewView {
   status?: string;
@@ -193,6 +201,8 @@ export class SessionController {
   private activeProviderId?: string;
   private automation: AutomationView = {};
   private lastReview?: ReviewView;
+  private lastReviewTarget?: string;
+  private selectedFindingIndex?: number;
   private disclosure?: {
     providerId: string;
     scope: string;
@@ -287,9 +297,12 @@ export class SessionController {
     if (this.commandHistory.at(-1) !== value) this.commandHistory.push(value);
     this.historyIndex = this.commandHistory.length;
     if (value === "/clear") {
+      this.selectedFindingIndex = undefined;
       this.patch({ transcript: [] });
       return;
     }
+    if (this.currentState.overlay?.kind === "finding")
+      this.patch({ overlay: undefined });
     if (value.startsWith("/") && this.currentState.overlay) {
       this.patch({ overlay: undefined });
     }
@@ -383,6 +396,8 @@ export class SessionController {
     this.commandHistory.length = 0;
     this.suggestions.clear();
     this.lastReview = undefined;
+    this.lastReviewTarget = undefined;
+    this.selectedFindingIndex = undefined;
     this.fullScanManifest = undefined;
     this.scanProgress = undefined;
     this.disclosure = undefined;
@@ -436,6 +451,7 @@ export class SessionController {
       switchbranch: () => this.previewSwitch(argument),
       pr: () => this.detectPullRequest(),
       review: () => this.openReviewPicker(),
+      findings: () => this.openFindings(argument),
       reviewstaged: () => this.review("staged"),
       reviewbranch: () => this.review("branch"),
       reviewpr: () => this.review("pull_request"),
@@ -522,6 +538,7 @@ export class SessionController {
           action.value === "commit"
             ? this.openWorkspace("commits")
             : this.review(action.value),
+        finding: () => this.openFinding(Number(action.value)),
         close: () => {},
         setup: () => this.setupAction(action.value),
       };
@@ -765,13 +782,21 @@ export class SessionController {
       const previous = this.currentState.graph;
       if (previous?.fingerprint === graph.fingerprint) return;
       this.suggestions.invalidate();
-      if (previous && announce) {
+      if (previous) {
         this.lastReview = undefined;
+        this.lastReviewTarget = undefined;
+        this.selectedFindingIndex = undefined;
         this.fullScanManifest = undefined;
-        this.append({
-          kind: "system",
-          body: `Git changed: ${graph.current} at ${graph.head?.slice(0, 7) ?? "unborn HEAD"}. Review context refreshed.`,
-        });
+        if (
+          this.currentState.overlay?.kind === "finding" ||
+          this.currentState.overlay?.kind === "findings"
+        )
+          this.patch({ overlay: undefined });
+        if (announce)
+          this.append({
+            kind: "system",
+            body: `Git changed: ${graph.current} at ${graph.head?.slice(0, 7) ?? "unborn HEAD"}. Review context refreshed.`,
+          });
       }
       this.updateGraphHeader(graph);
     } catch {
@@ -976,8 +1001,11 @@ export class SessionController {
     });
     for (const job of notable) {
       const result = job.result as ReviewView | undefined;
-      if (job.status === "completed" && result) this.appendReview(result);
-      else {
+      if (job.status === "completed" && result) {
+        this.lastReview = result;
+        this.lastReviewTarget = String(job.target ?? "branch");
+        this.appendReview(result);
+      } else {
         this.append({
           kind: job.status === "failed" ? "error" : "status",
           title: `Automation · ${String(job.status)}`,
@@ -1033,7 +1061,11 @@ export class SessionController {
       const result = response.result as ReviewView | undefined;
       const job = response.job as Record<string, unknown> | undefined;
       if (job?.id) this.seenJobs.add(`${String(job.id)}:completed`);
-      if (result) this.appendReview(result);
+      if (result) {
+        this.lastReview = result;
+        this.lastReviewTarget = String(job?.target ?? "branch");
+        this.appendReview(result);
+      }
       await this.pollAutomationJobs();
     } catch (error) {
       this.appendError(error);
@@ -1299,6 +1331,8 @@ export class SessionController {
               },
             );
             this.lastReview = undefined;
+            this.lastReviewTarget = undefined;
+            this.selectedFindingIndex = undefined;
             this.disclosure = undefined;
             await this.refreshContext();
             this.append({
@@ -1371,6 +1405,7 @@ export class SessionController {
             },
           );
           this.lastReview = result as ReviewView;
+          this.lastReviewTarget = "full";
           this.appendReview(this.lastReview);
           this.completePipeline();
         } catch (error) {
@@ -1433,6 +1468,7 @@ export class SessionController {
           );
           const review = preparation.review as ReviewView;
           this.lastReview = review;
+          this.lastReviewTarget = "staged";
           this.appendReview(review);
           this.completePipeline();
           if (review.blocking) {
@@ -1652,6 +1688,7 @@ export class SessionController {
             { signal: request.signal },
           );
           this.lastReview = result as ReviewView;
+          this.lastReviewTarget = target;
           this.appendReview(this.lastReview);
           this.completePipeline();
         } catch (error) {
@@ -1673,27 +1710,8 @@ export class SessionController {
 
   private async ask(question: string): Promise<void> {
     this.patch({ pipeline: undefined });
-    const findingMatch = question.match(/^explain finding\s+(\d+)$/i);
-    if (findingMatch && this.lastReview) {
-      const finding = this.lastReview.findings?.[Number(findingMatch[1]) - 1];
-      if (finding) {
-        this.append({
-          kind: "answer",
-          title: finding.title,
-          body: `${finding.explanation}\nImpact: ${finding.impact}\nInspect: ${finding.recommendation}`,
-        });
-        return;
-      }
-    }
-    if (!this.activeProviderId) {
-      this.append({
-        kind: "error",
-        title: "Select a review provider",
-        body: "Repository questions require a provider. Use /provider first.",
-      });
-      return;
-    }
-    const target = /branch|commit/i.test(question) ? "branch" : "staged";
+    const payload = this.questionPayload(question);
+    if (!payload) return;
     const retry = async (): Promise<void> => this.ask(question);
     await this.runBusy("Gathering repository evidence…", async () => {
       this.disclosure = undefined;
@@ -1704,9 +1722,7 @@ export class SessionController {
             "explain",
             this.options.repositoryPath,
             {
-              mode: "ask",
-              question,
-              target,
+              ...payload,
               remoteApproved: this.activeProviderId
                 ? this.approvedProviders.has(this.activeProviderId)
                 : false,
@@ -1743,6 +1759,75 @@ export class SessionController {
     });
   }
 
+  private questionPayload(
+    question: string,
+  ): Record<string, unknown> | undefined {
+    const findings = this.resolveQuestionFindings(question);
+    if (!findings) return undefined;
+    if (!this.activeProviderId) {
+      this.append({
+        kind: "error",
+        title: "Select a review provider",
+        body: "Repository questions require a provider. Use /provider first.",
+      });
+      return undefined;
+    }
+    const target = this.lastReview
+      ? "review"
+      : /branch|commit/i.test(question)
+        ? "branch"
+        : "repository";
+    const reviewContext = this.lastReview
+      ? {
+          target: this.lastReviewTarget ?? "staged",
+          summary: this.lastReview.summary ?? "",
+          findings,
+        }
+      : undefined;
+    return { mode: "ask", question, target, reviewContext };
+  }
+
+  private resolveQuestionFindings(
+    question: string,
+  ): ReviewFinding[] | undefined {
+    const references = this.findingReferences(question);
+    if (!references.length && this.selectedFindingIndex)
+      references.push(this.selectedFindingIndex);
+    if (references.length && !this.lastReview) {
+      this.append({
+        kind: "error",
+        body: "No review is active. Run a review first.",
+      });
+      return undefined;
+    }
+    const missing = references.filter(
+      (index) => !this.lastReview?.findings?.[index - 1],
+    );
+    if (missing.length) {
+      this.append({
+        kind: "error",
+        body: `Finding ${missing.join(", ")} is not in the active review.`,
+      });
+      return undefined;
+    }
+    return references.length
+      ? references.map((index) => ({
+          ...this.lastReview!.findings![index - 1],
+          index,
+        }))
+      : (this.lastReview?.findings ?? [])
+          .slice(0, 10)
+          .map((finding, index) => ({ ...finding, index: index + 1 }));
+  }
+
+  private findingReferences(question: string): number[] {
+    const match = question.match(
+      /\bfindings?\s+((?:\d+\s*(?:(?:,|and|&|to|-)\s*\d+\s*)*)+)/i,
+    );
+    if (!match) return [];
+    return [...new Set((match[1].match(/\d+/g) ?? []).map(Number))];
+  }
+
   private handleEngineEvent(event: EngineEvent): void {
     if (event.event.startsWith("operation_")) {
       this.handleOperationEvent(event);
@@ -1763,7 +1848,6 @@ export class SessionController {
       event.payload?.kind === "provider_heartbeat"
         ? new ScanActivityPresenter().heartbeat(
             this.scanProgress,
-            this.currentState.header?.provider ?? "Reviewer",
             Number(event.payload?.elapsedMs ?? 0),
           )
         : String(event.payload?.message ?? "Working…");
@@ -1773,10 +1857,12 @@ export class SessionController {
   private handleScanProgressEvent(event: EngineEvent): void {
     this.scanProgress = event.payload as ScanProgressView;
     this.patch({
-      activity: new ScanActivityPresenter().progress(
-        this.scanProgress,
-        this.currentState.header?.provider ?? "Reviewer",
-      ),
+      scanProgress: this.scanProgress,
+      scanBatchStartedAt:
+        this.scanProgress.stage === "review"
+          ? (this.currentState.scanBatchStartedAt ?? Date.now())
+          : undefined,
+      activity: new ScanActivityPresenter().progress(this.scanProgress),
     });
     const stages: Record<string, string> = {
       verification: "verify",
@@ -1789,14 +1875,16 @@ export class SessionController {
   private handleOperationEvent(event: EngineEvent): void {
     const record = event.payload as unknown as OperationRecord;
     this.activityStore.update(record);
+    const recentOperation = describeRecentOperation(record);
+    if (recentOperation) this.patch({ recentOperation });
     if (record.actor !== "Git")
       this.patch({
         activeActor: record.status === "running" ? record.actor : "Preflight",
         activity:
-          record.actor === "Provider" && this.scanProgress
+          record.actor === "Provider"
             ? this.currentState.activity
             : (record.summary ??
-              `${record.actor} ${record.status === "running" ? "is running" : record.status} ${record.category}`),
+              `Preflight ${record.status === "running" ? "started" : record.status} ${record.category}`),
       });
   }
 
@@ -1860,15 +1948,14 @@ export class SessionController {
 
   private appendReview(review: ReviewView): void {
     const findings = review.findings ?? [];
+    this.selectedFindingIndex = undefined;
+    const presenter = new FindingsPresenter();
     const body = [
       review.summary ?? "No summary returned.",
-      ...findings.map((finding, index) => {
-        const evidence = finding.evidence?.[0];
-        return `${index + 1}. ${(finding.severity ?? "info").toUpperCase()} · ${finding.title ?? "Finding"} · ${evidence?.path ?? "unknown"}:${evidence?.start_line ?? "?"} · ${finding.verification ?? "unverified"}`;
-      }),
+      presenter.summary(findings),
       findings.length
-        ? "Ask “explain finding 1” for detail."
-        : "No verified findings.",
+        ? "Use /findings to inspect and discuss them."
+        : "No findings.",
     ].join("\n");
     this.append({
       kind: "review",
@@ -1876,13 +1963,73 @@ export class SessionController {
       body,
       data: review as Record<string, unknown>,
     });
+    if (findings.length) this.openFindings();
+  }
+
+  private openFindings(filter = "all"): void {
+    const findings = this.lastReview?.findings ?? [];
+    if (!findings.length) {
+      this.append({
+        kind: "status",
+        body: "No findings in the active review.",
+      });
+      return;
+    }
+    const valid = ["all", "critical", "warning", "suggestion", "informational"];
+    if (!valid.includes(filter)) {
+      this.append({
+        kind: "error",
+        body: "Use /findings [all|critical|warning|suggestion|informational].",
+      });
+      return;
+    }
+    const presenter = new FindingsPresenter();
+    const rows = presenter.rows(findings, filter);
+    this.patch({
+      overlay: {
+        kind: "findings",
+        title: `Findings · ${filter} · ${rows.length} shown`,
+        body: `${presenter.summary(findings)}\nFilter with /findings critical, warning, suggestion, or all. Select a row for evidence and follow-up.`,
+        items: rows.map((row) => ({
+          label: row.label,
+          value: String(row.index),
+          action: { kind: "finding", value: String(row.index) },
+        })),
+      },
+    });
+  }
+
+  private openFinding(index: number): void {
+    const finding = this.lastReview?.findings?.[index - 1];
+    if (!finding) {
+      this.append({
+        kind: "error",
+        body: `Finding ${index} is not in the active review.`,
+      });
+      return;
+    }
+    this.selectedFindingIndex = index;
+    this.patch({
+      overlay: {
+        kind: "finding",
+        title: `Finding ${index}`,
+        body: new FindingsPresenter().detail(index, finding),
+      },
+    });
   }
 
   private async runBusy(
     label: string,
     operation: () => Promise<void>,
   ): Promise<void> {
-    this.patch({ busy: true, activity: label });
+    this.scanProgress = undefined;
+    this.patch({
+      busy: true,
+      activity: label,
+      scanProgress: undefined,
+      scanBatchStartedAt: undefined,
+      recentOperation: undefined,
+    });
     try {
       await operation();
     } catch (error) {
@@ -1897,6 +2044,9 @@ export class SessionController {
       this.patch({
         busy: false,
         activity: undefined,
+        scanProgress: undefined,
+        scanBatchStartedAt: undefined,
+        recentOperation: undefined,
         activeActor: undefined,
         interruptionNotice: undefined,
       });

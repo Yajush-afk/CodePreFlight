@@ -13,6 +13,10 @@ Use `/files`, `/file <path>`, `/branches`, `/switchbranch <branch>`, and `/commi
 are the provider shortcuts. `/mode`, `/jobs`, `/automationgrant`, `/automationrevoke`,
 and `/activity` expose automation and operation details.
 
+After any review, `/findings` opens the scrollable findings explorer. Select one to read its
+details and ask follow-up questions, including multiple finding numbers. With an empty composer,
+Up/Down scroll the transcript; Ctrl+P/Ctrl+N recall prior commands.
+
 Arguments remain separate values; only command names are single tokens. Old spaced
 commands offer a correction for one compatibility release. Shell CLI syntax is unchanged.
 Use `/help` for the complete command list and `/quit` to leave the ephemeral session.

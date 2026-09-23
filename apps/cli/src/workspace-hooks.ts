@@ -71,6 +71,22 @@ export function useWorkspaceDimensions() {
   return { ...dimensions, isTTY: Boolean(stdout.isTTY) };
 }
 
+export function useScanClock(state: SessionState): number {
+  const [now, setNow] = useState(Date.now());
+  const active =
+    state.busy &&
+    state.scanProgress?.stage === "review" &&
+    (state.scanProgress.status === "started" ||
+      Boolean(state.scanProgress.activeBatches?.length));
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
 export function useCommandSuggestions(
   input: string,
   controller: SessionController,

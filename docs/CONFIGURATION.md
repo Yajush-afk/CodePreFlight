@@ -46,3 +46,12 @@ timeout_seconds = 600
 
 The allowed range is 1 to 1800 seconds. This controls each provider invocation, not the total
 duration of `/scanfull`.
+
+Full scans normally send one batch request at a time. The Codex CLI adapter can use two concurrent
+requests following a short synthetic rate-limit probe; this is not a guarantee against provider
+limits. To force serial review or opt another provider into bounded concurrency, configure:
+
+```toml
+[scan]
+max_parallel_requests = 1 # allowed: 1 or 2
+```

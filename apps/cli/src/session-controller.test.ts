@@ -41,6 +41,7 @@ class FakeEngine implements SessionEngine {
   requestOptions: EngineRequestOptions[] = [];
   reviewApproved = false;
   automationMode = "manual";
+  scanFindings: Array<Record<string, unknown>> = [];
 
   async request(
     command: EngineCommand,
@@ -215,7 +216,7 @@ class FakeEngine implements SessionEngine {
       return {
         status: "completed",
         summary: "Full scan complete.",
-        findings: [],
+        findings: this.scanFindings,
       };
     }
     if (command === "commit") {
@@ -383,6 +384,85 @@ describe("SessionController", () => {
     expect(controller.state.transcript.at(-1)?.body).toBe(
       "The branch changes token validation.",
     );
+  });
+
+  it("keeps plural finding follow-ups scoped to the completed full scan", async () => {
+    const engine = new FakeEngine();
+    engine.scanFindings = Array.from({ length: 10 }, (_, index) => ({
+      id: `finding-${index + 1}`,
+      title: `Finding ${index + 1}`,
+      explanation: `The defect affects case ${index + 1}.`,
+      severity: "warning",
+      verification: "verified",
+      evidence: [{ path: "auth.py", start_line: index + 1 }],
+    }));
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+    await controller.submit("/scanfull");
+    await controller.confirm(controller.state.pendingDecision!.id, true);
+
+    await controller.submit("explain findings 2,3,4 and 10");
+
+    expect(engine.requests.at(-1)).toMatchObject({
+      command: "explain",
+      payload: {
+        mode: "ask",
+        target: "review",
+        reviewContext: {
+          target: "full",
+          findings: [
+            { id: "finding-2", index: 2 },
+            { id: "finding-3", index: 3 },
+            { id: "finding-4", index: 4 },
+            { id: "finding-10", index: 10 },
+          ],
+        },
+      },
+    });
+    expect(controller.state.transcript.at(-1)?.kind).toBe("answer");
+  });
+
+  it("opens a navigable findings explorer instead of appending every finding", async () => {
+    const engine = new FakeEngine();
+    engine.scanFindings = Array.from({ length: 38 }, (_, index) => ({
+      id: `finding-${index + 1}`,
+      severity: index === 0 ? "critical" : "warning",
+      title: `Finding ${index + 1}`,
+      explanation: "Evidence-backed explanation",
+      impact: "Impact",
+      recommendation: "Inspect the validation",
+      verification: "verified",
+      evidence: [{ path: "auth.py", start_line: index + 1 }],
+    }));
+    const controller = new SessionController({
+      repositoryPath: "/repo",
+      engine,
+    });
+    await controller.start();
+    await controller.submit("/scanfull");
+    await controller.confirm(controller.state.pendingDecision!.id, true);
+
+    expect(controller.state.transcript.at(-1)?.body).toContain("38 findings");
+    expect(controller.state.transcript.at(-1)?.body).not.toContain(
+      "Finding 38",
+    );
+    expect(controller.state.overlay?.kind).toBe("findings");
+    expect(controller.state.overlay?.items?.length).toBeGreaterThanOrEqual(38);
+
+    await controller.select({ kind: "finding", value: "10" });
+    expect(controller.state.overlay?.kind).toBe("finding");
+    expect(controller.state.overlay?.body).toContain("Finding 10");
+    await controller.submit("How can I fix this?");
+    expect(engine.requests.at(-1)).toMatchObject({
+      command: "explain",
+      payload: {
+        target: "review",
+        reviewContext: { findings: [{ id: "finding-10" }] },
+      },
+    });
   });
 
   it("previews and confirms provider selection", async () => {
@@ -571,7 +651,7 @@ describe("SessionController", () => {
       idleTimeoutMs: 240000,
     });
     expect(activities).toContainEqual(
-      expect.stringContaining("Codex CLI is reviewing batch 2 of 4"),
+      expect.stringContaining("Preflight is reviewing batch 2 of 4"),
     );
     expect(activities).toContainEqual(
       expect.stringContaining("batch 2 of 4 · 1m 12s elapsed"),

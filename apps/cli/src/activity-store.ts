@@ -12,6 +12,22 @@ export interface OperationRecord {
   summary?: string;
 }
 
+export function describeRecentOperation(
+  record: OperationRecord,
+): string | undefined {
+  if (!record.command || (record.actor !== "Git" && record.actor !== "Check"))
+    return undefined;
+  const outcome =
+    record.status === "running"
+      ? "is running"
+      : record.status === "completed" || record.status === "passed"
+        ? "ran"
+        : record.status === "recommended" || record.status === "skipped"
+          ? "skipped"
+          : "finished";
+  return `Preflight ${outcome} ${record.command}${record.status === "running" ? "" : ` · ${record.status}`}`;
+}
+
 export class ActivityStore {
   private records = new Map<string, OperationRecord>();
 
@@ -37,9 +53,17 @@ export class ActivityStore {
       Array.from(this.records.values())
         .map(
           (record) =>
-            `${record.summary ?? `${record.actor} · ${record.category}`} · ${record.status}${record.durationMs === undefined ? "" : ` · ${record.durationMs}ms`}\n  ${record.command ?? "No shell command"}\n  ${record.mutability} · approval: ${record.approval}${record.reason ? ` · ${record.reason}` : ""}`,
+            `${record.summary ?? this.label(record)} · ${record.status}${record.durationMs === undefined ? "" : ` · ${record.durationMs}ms`}\n  ${record.command ?? "No shell command"}\n  ${record.mutability} · approval: ${record.approval}${record.reason ? ` · ${record.reason}` : ""}`,
         )
         .join("\n") || "No operations recorded in this session."
     );
+  }
+
+  private label(record: OperationRecord): string {
+    if (record.actor === "Git") return "Preflight checked Git state";
+    if (record.actor === "Check") return "Preflight ran a repository check";
+    if (record.actor === "Provider")
+      return "Preflight requested review analysis";
+    return `Preflight ${record.category}`;
   }
 }
