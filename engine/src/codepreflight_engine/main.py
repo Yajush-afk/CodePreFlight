@@ -19,6 +19,7 @@ from .commit import create_commit, prepare_commit
 from .config import load_config
 from .doctor import doctor_report
 from .errors import CodePreflightError
+from .finding_ledger import FindingLedger
 from .git_actions import GitActions
 from .hooks import HookManager
 from .initialize import initialize_repository
@@ -410,6 +411,12 @@ def _handle_explain(request: EngineRequest, path: Path) -> None:
     return
 
 
+def _handle_findings(request: EngineRequest, path: Path) -> None:
+    snapshot = RepositoryInspector().inspect(path)
+    complete(request.requestId, FindingLedger(Path(snapshot.root)).run(request.payload))
+    return
+
+
 def _handle_init(request: EngineRequest, path: Path) -> None:
     init_root = RepositoryInspector().inspect(path).root
     result = initialize_repository(
@@ -481,6 +488,7 @@ COMMAND_HANDLERS = {
     "commit": _handle_commit,
     "hooks": _handle_hooks,
     "explain": _handle_explain,
+    "findings": _handle_findings,
     "init": _handle_init,
     "review": _handle_review,
     "panel_review": _handle_panel_review,

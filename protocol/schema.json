@@ -23,6 +23,7 @@
             "commit",
             "doctor",
             "explain",
+            "findings",
             "git_action",
             "hooks",
             "init",
@@ -86,6 +87,134 @@
     },
     "findingLifecycle": {
       "enum": ["open", "needs_rereview", "resolved", "dismissed"]
+    },
+    "findingReconciliation": {
+      "type": "object",
+      "required": ["finding_id", "outcome", "explanation", "evidence"],
+      "properties": {
+        "finding_id": { "type": "string" },
+        "outcome": { "enum": ["present", "resolved", "uncertain"] },
+        "explanation": { "type": "string" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceLocation" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "findingLedgerItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "branch",
+        "category",
+        "path",
+        "symbol",
+        "title",
+        "explanation",
+        "impact",
+        "recommendation",
+        "severity",
+        "legacy_severity",
+        "confidence",
+        "verification",
+        "lifecycle",
+        "first_seen_snapshot",
+        "last_seen_snapshot",
+        "last_evaluated_snapshot",
+        "last_commit",
+        "target",
+        "provider_id",
+        "provider_model",
+        "dismissal_reason",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "branch": { "type": "string" },
+        "category": { "type": "string" },
+        "path": { "type": "string" },
+        "symbol": { "type": "string" },
+        "title": { "type": "string" },
+        "explanation": { "type": "string" },
+        "impact": { "type": "string" },
+        "recommendation": { "type": "string" },
+        "severity": { "$ref": "#/$defs/severity" },
+        "legacy_severity": {
+          "enum": ["warning", "suggestion", "informational", null]
+        },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "verification": { "$ref": "#/$defs/verificationState" },
+        "lifecycle": { "$ref": "#/$defs/findingLifecycle" },
+        "first_seen_snapshot": { "type": "string" },
+        "last_seen_snapshot": { "type": "string" },
+        "last_evaluated_snapshot": { "type": ["string", "null"] },
+        "last_commit": { "type": "string" },
+        "target": { "type": "string" },
+        "provider_id": { "type": "string" },
+        "provider_model": { "type": ["string", "null"] },
+        "dismissal_reason": { "type": ["string", "null"] },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "findingOccurrence": {
+      "type": "object",
+      "required": [
+        "review_id",
+        "snapshot",
+        "commit_oid",
+        "target",
+        "severity",
+        "verification",
+        "evidence",
+        "observed_at"
+      ],
+      "properties": {
+        "review_id": { "type": "string" },
+        "snapshot": { "type": "string" },
+        "commit_oid": { "type": "string" },
+        "target": { "type": "string" },
+        "severity": { "$ref": "#/$defs/severity" },
+        "verification": { "$ref": "#/$defs/verificationState" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceLocation" }
+        },
+        "observed_at": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "findingTransition": {
+      "type": "object",
+      "required": ["from_state", "to_state", "reason", "created_at"],
+      "properties": {
+        "from_state": { "$ref": "#/$defs/findingLifecycle" },
+        "to_state": { "$ref": "#/$defs/findingLifecycle" },
+        "reason": { "type": "string" },
+        "review_id": { "type": ["string", "null"] },
+        "commit_oid": { "type": ["string", "null"] },
+        "created_at": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "findingDetail": {
+      "type": "object",
+      "required": ["finding", "occurrences", "transitions"],
+      "properties": {
+        "finding": { "$ref": "#/$defs/findingLedgerItem" },
+        "occurrences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/findingOccurrence" }
+        },
+        "transitions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/findingTransition" }
+        }
+      },
+      "additionalProperties": false
     },
     "verificationState": {
       "enum": ["verified", "partially_verified", "unverified", "rejected"]

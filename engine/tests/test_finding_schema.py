@@ -14,7 +14,7 @@ from codepreflight_engine.models import RepositoryAnswer
 def test_provider_schema_requires_every_object_property_for_codex() -> None:
     schema = provider_output_schema()
 
-    assert schema["required"] == ["summary", "findings"]
+    assert schema["required"] == ["summary", "findings", "reconciliations"]
     evidence = schema["$defs"]["EvidenceLocation"]
     assert evidence["required"] == ["path", "start_line", "end_line", "symbol"]
     assert "default" not in evidence["properties"]["symbol"]

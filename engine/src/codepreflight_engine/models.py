@@ -289,6 +289,13 @@ class Finding(FindingDraft):
     legacy_severity: Literal["warning", "suggestion", "informational"] | None = None
 
 
+class FindingReconciliation(StrictModel):
+    finding_id: str
+    outcome: Literal["present", "resolved", "uncertain"]
+    explanation: str = Field(min_length=1)
+    evidence: list[EvidenceLocation] = Field(default_factory=list)
+
+
 class GitOperationRisk(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
@@ -354,6 +361,7 @@ class WorkspaceViewData(StrictModel):
 class ProviderReviewResponse(StrictModel):
     summary: str = Field(min_length=1)
     findings: list[FindingDraft] = Field(default_factory=list)
+    reconciliations: list[FindingReconciliation] = Field(default_factory=list)
 
 
 class BlastRadiusItem(StrictModel):

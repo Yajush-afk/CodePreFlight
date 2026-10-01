@@ -16,6 +16,7 @@ from .checks import CheckRunner
 from .config import load_config, normalize_severity
 from .context import ContextBuilder
 from .errors import CodePreflightError
+from .finding_ledger import FindingLedger
 from .git import GitRunner
 from .merged_pull_request import (
     MergedPullRequestContextBuilder,
@@ -26,6 +27,7 @@ from .models import (
     BlastRadiusItem,
     CheckDefinition,
     CheckResult,
+    ContextEntry,
     ContextPackage,
     Finding,
     ProviderKind,
@@ -38,6 +40,7 @@ from .readiness import ProviderHealth, require_review_ready
 from .request_values import request_flag
 from .review_consent import require_review_consent
 from .review_invocation import ReviewInvocation
+from .secrets import redact_secrets, verify_with_external_scanner
 from .trust import is_trusted
 from .verification import FindingVerifier
 from .working_tree import WorkingTreeContextBuilder, WorkingTreeSnapshot
@@ -107,6 +110,10 @@ class ReviewOrchestrator:
         )
         emit("workflow_stage", {"stage": "context", "actor": "Preflight"})
         context = self._build_context(root, config, scope)
+        ledger = FindingLedger(root)
+        ledger_branch = self._ledger_branch(ledger, scope)
+        prior_findings = ledger.reconciliation_candidates(ledger_branch, context.changed_files)
+        context = self._with_prior_findings(context, prior_findings)
         if provider.kind == ProviderKind.SUBSCRIPTION_CLI and not is_trusted(root):
             raise CodePreflightError(
                 "repository_not_trusted",
@@ -136,7 +143,18 @@ class ReviewOrchestrator:
             if cached:
                 self._require_current_working_snapshot(root, scope)
                 emit("progress", {"message": "Using cached review for unchanged repository state"})
-                return cached
+                cached_findings = ledger.record_review(
+                    branch=ledger_branch,
+                    snapshot=fingerprint,
+                    commit=self._ledger_commit(ledger, scope),
+                    target=scope.target,
+                    provider=provider,
+                    findings=cached.findings,
+                    reconciliations=[],
+                    context=context,
+                    historical_files=self._evidence_files(scope),
+                )
+                return cached.model_copy(update={"findings": cached_findings})
 
         require_review_consent(provider, context, config, payload, emit)
         emit("progress", {"message": "Preflight sent the selected context for review"})
@@ -169,6 +187,17 @@ class ReviewOrchestrator:
             revision=scope.revision,
             historical_files=self._evidence_files(scope),
             historical_diff=self._evidence_diff(scope),
+        )
+        findings = ledger.record_review(
+            branch=ledger_branch,
+            snapshot=fingerprint,
+            commit=self._ledger_commit(ledger, scope),
+            target=scope.target,
+            provider=provider,
+            findings=findings,
+            reconciliations=response.reconciliations,
+            context=context,
+            historical_files=self._evidence_files(scope),
         )
         for finding in findings:
             emit("finding", {"finding": finding.model_dump(mode="json")})
@@ -289,7 +318,10 @@ class ReviewOrchestrator:
             "low means a minor defect or useful improvement. Every finding must cite an "
             "existing file and line range from the supplied context. If no meaningful issue "
             "exists, "
-            "return an empty findings array. Return only JSON matching the required schema.\n\n"
+            "return an empty findings array. Set reconciliations to an empty array unless the "
+            "context contains a Prior findings section. Never mark a prior finding resolved by "
+            "omission: evaluate it explicitly and cite current evidence. Return only JSON matching "
+            "the required schema.\n\n"
             + "Review-depth focus: "
             + DEPTH_FOCUS[depth]
             + "\n\n"
@@ -302,6 +334,58 @@ class ReviewOrchestrator:
             raise CodePreflightError(
                 "unsupported_review_depth", f"Unsupported review depth: {depth}"
             )
+
+    def _ledger_branch(self, ledger: FindingLedger, scope: ReviewScope) -> str:
+        return (
+            f"merged-pr:{scope.historical.number}"
+            if scope.historical is not None
+            else ledger.current_branch()
+        )
+
+    def _ledger_commit(self, ledger: FindingLedger, scope: ReviewScope) -> str:
+        return scope.revision or ledger.current_commit()
+
+    def _with_prior_findings(
+        self, context: ContextPackage, findings: list[dict[str, Any]]
+    ) -> ContextPackage:
+        if not findings:
+            return context
+        lines = [
+            "## Prior findings requiring explicit evaluation",
+            "For each item, return present, resolved, or uncertain in reconciliations. ",
+        ]
+        for finding in findings:
+            lines.append(
+                f"- {finding['id']} | {finding['category']} | {finding['path']} | "
+                f"{finding['title']} | failure: {finding['explanation']} | "
+                f"impact: {finding['impact']}"
+            )
+        redacted = redact_secrets("\n".join(lines))
+        if not redacted.safe:
+            raise CodePreflightError(
+                "unsafe_secret_content",
+                "Prior finding context contains a private-key marker that cannot be sent safely",
+                recoverable=True,
+            )
+        scanner = verify_with_external_scanner(redacted.content)
+        section = redacted.content
+        entry = ContextEntry(
+            path="[finding-ledger]",
+            reason="prior findings requiring explicit reconciliation",
+            included_characters=len(section),
+            status="redacted" if redacted.count else "included",
+        )
+        manifest = context.manifest.model_copy(
+            update={
+                "entries": [*context.manifest.entries, entry],
+                "total_characters": context.manifest.total_characters + len(section),
+                "redactions": context.manifest.redactions + redacted.count,
+                "secret_scanner": scanner,
+            }
+        )
+        return context.model_copy(
+            update={"content": f"{context.content}\n\n{section}", "manifest": manifest}
+        )
 
     def _repair_prompt(self, malformed_output: str) -> str:
         return (
