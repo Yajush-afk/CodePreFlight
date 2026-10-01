@@ -7,7 +7,7 @@ describe("request activity diagnostics", () => {
     let now = 0;
     const tracker = new RequestActivityTracker("scan", () => now);
     tracker.record({
-      protocolVersion: 3,
+      protocolVersion: 4,
       requestId: "scan",
       event: "scan_progress",
       payload: {
@@ -20,7 +20,7 @@ describe("request activity diagnostics", () => {
     } satisfies EngineEvent);
     now = 28_000;
     tracker.record({
-      protocolVersion: 3,
+      protocolVersion: 4,
       requestId: "scan",
       event: "progress",
       payload: { kind: "provider_heartbeat", elapsedMs: 28_000 },

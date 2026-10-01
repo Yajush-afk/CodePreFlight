@@ -47,7 +47,7 @@ def prepare_pull_request(
     risks = [
         finding
         for finding in review.findings
-        if finding.severity in {Severity.CRITICAL, Severity.WARNING}
+        if finding.severity in {Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM}
     ]
     risk_text = (
         "- AI review did not complete: structured provider output remained invalid after repair."
@@ -58,7 +58,7 @@ def prepare_pull_request(
             for finding in risks
         )
         if risks
-        else "- No verified critical or warning findings."
+        else "- No verified critical, high, or medium findings."
     )
     recommendations = sorted(
         {

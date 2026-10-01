@@ -204,7 +204,7 @@ class FakeEngine implements SessionEngine {
     if (command === "scan") {
       if (!payload.fullScanApproved) {
         onEvent?.({
-          protocolVersion: 3,
+          protocolVersion: 4,
           requestId: "scan",
           event: "consent_required",
           payload: {
@@ -227,7 +227,7 @@ class FakeEngine implements SessionEngine {
         );
       }
       onEvent?.({
-        protocolVersion: 3,
+        protocolVersion: 4,
         requestId: "scan",
         event: "scan_progress",
         payload: {
@@ -241,7 +241,7 @@ class FakeEngine implements SessionEngine {
         },
       });
       onEvent?.({
-        protocolVersion: 3,
+        protocolVersion: 4,
         requestId: "scan",
         event: "progress",
         payload: {
@@ -273,7 +273,7 @@ class FakeEngine implements SessionEngine {
     }
     if (command === "review") {
       onEvent?.({
-        protocolVersion: 3,
+        protocolVersion: 4,
         requestId: "review",
         event: "consent_required",
         payload: {
@@ -303,7 +303,7 @@ class FakeEngine implements SessionEngine {
         findings: [
           {
             id: "finding-1",
-            severity: "warning",
+            severity: "medium",
             title: "Expired tokens are accepted",
             explanation: "Expiration validation was removed.",
             impact: "Expired sessions remain valid.",
@@ -549,7 +549,7 @@ describe("SessionController", () => {
       id: `finding-${index + 1}`,
       title: `Finding ${index + 1}`,
       explanation: `The defect affects case ${index + 1}.`,
-      severity: "warning",
+      severity: "medium",
       verification: "verified",
       evidence: [{ path: "auth.py", start_line: index + 1 }],
     }));
@@ -586,7 +586,7 @@ describe("SessionController", () => {
     const engine = new FakeEngine();
     engine.scanFindings = Array.from({ length: 38 }, (_, index) => ({
       id: `finding-${index + 1}`,
-      severity: index === 0 ? "critical" : "warning",
+      severity: index === 0 ? "critical" : "medium",
       title: `Finding ${index + 1}`,
       explanation: "Evidence-backed explanation",
       impact: "Impact",
@@ -626,9 +626,9 @@ describe("SessionController", () => {
 
     const suggestions = await controller.suggest("/findings ");
     expect(suggestions.map((item) => item.value)).toEqual(
-      expect.arrayContaining(["all", "critical", "warning", "suggestion"]),
+      expect.arrayContaining(["all", "critical", "high", "medium", "low"]),
     );
-    expect(suggestions.find((item) => item.value === "warning")?.context).toBe(
+    expect(suggestions.find((item) => item.value === "medium")?.context).toBe(
       "37 findings",
     );
   });

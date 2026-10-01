@@ -14,9 +14,9 @@ export interface FindingView {
 
 const ORDER: Record<string, number> = {
   critical: 0,
-  warning: 1,
-  suggestion: 2,
-  informational: 3,
+  high: 1,
+  medium: 2,
+  low: 3,
 };
 
 export class FindingsPresenter {
@@ -29,7 +29,7 @@ export class FindingsPresenter {
     const partial = findings.filter(
       (item) => item.verification === "partially_verified",
     ).length;
-    return `${findings.length} findings · ${count("critical")} critical · ${count("warning")} warnings · ${count("suggestion")} suggestions\n${verified} verified · ${partial} partially verified`;
+    return `${findings.length} findings · ${count("critical")} critical · ${count("high")} high · ${count("medium")} medium · ${count("low")} low\n${verified} verified · ${partial} partially verified`;
   }
 
   rows(
@@ -41,8 +41,8 @@ export class FindingsPresenter {
       .filter(({ finding }) => filter === "all" || finding.severity === filter)
       .sort(
         (a, b) =>
-          (ORDER[a.finding.severity ?? "informational"] ?? 4) -
-          (ORDER[b.finding.severity ?? "informational"] ?? 4),
+          (ORDER[a.finding.severity ?? "low"] ?? 4) -
+          (ORDER[b.finding.severity ?? "low"] ?? 4),
       )
       .map(({ finding, index }) => {
         const evidence = finding.evidence?.[0];

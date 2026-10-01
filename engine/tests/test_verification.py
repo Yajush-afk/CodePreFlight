@@ -9,7 +9,7 @@ from codepreflight_engine.verification import FindingVerifier
 def draft(path: str, line: int = 1) -> FindingDraft:
     return FindingDraft.model_validate(
         {
-            "severity": "warning",
+            "severity": "medium",
             "title": "Potential issue",
             "explanation": "The value may be incorrect.",
             "impact": "Behavior may regress.",
@@ -51,6 +51,7 @@ def test_normalizes_evidence_paths_and_validates_test_file_suggestions(
 
     assert findings[0].evidence[0].path == "file.py"
     assert findings[0].verification.value == "partially_verified"
+    assert findings[0].lifecycle.value == "open"
     assert "Suggested test file does not exist: tests/missing.py" in findings[0].verification_notes
 
 

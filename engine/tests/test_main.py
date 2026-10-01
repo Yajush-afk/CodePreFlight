@@ -24,7 +24,7 @@ def test_status_request_returns_snapshot(
     handle_line(
         json.dumps(
             {
-                "protocolVersion": 3,
+                "protocolVersion": 4,
                 "requestId": "status-1",
                 "command": "status",
                 "repositoryPath": str(git_repository),
@@ -54,7 +54,7 @@ def test_local_log_excludes_request_payload_and_repository_content(
     handle_line(
         json.dumps(
             {
-                "protocolVersion": 3,
+                "protocolVersion": 4,
                 "requestId": "super-secret-source-content-request",
                 "command": "status",
                 "repositoryPath": str(git_repository),
@@ -76,7 +76,7 @@ def test_workspace_request_returns_local_commits(
     handle_line(
         json.dumps(
             {
-                "protocolVersion": 3,
+                "protocolVersion": 4,
                 "requestId": "workspace-1",
                 "command": "workspace",
                 "repositoryPath": str(git_repository),

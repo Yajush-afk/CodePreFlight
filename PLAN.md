@@ -202,7 +202,7 @@ A cloned repository is untrusted by default. Approval is recorded against its ca
 
 Each Finding contains:
 
-- severity: Critical, Warning, Suggestion, or Informational;
+- severity: Critical, High, Medium, or Low;
 - concise title;
 - explanation of the problem;
 - repository Evidence with file and line locations;

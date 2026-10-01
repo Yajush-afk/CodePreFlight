@@ -90,3 +90,18 @@ def test_config_validation_reports_precise_field(
             }
         ]
     }
+
+
+def test_legacy_block_severities_are_normalized(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty-config"))
+    (git_repository / ".codepreflight.toml").write_text(
+        '[review]\npolicy = "block"\n'
+        'block_severities = ["critical", "warning", "suggestion", "informational"]\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(git_repository)
+
+    assert config["review"]["block_severities"] == ["critical", "high", "medium", "low"]

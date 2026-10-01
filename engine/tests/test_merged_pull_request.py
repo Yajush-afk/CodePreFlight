@@ -155,7 +155,7 @@ def test_reviews_historical_evidence_without_running_current_checkout_checks(
                     "summary": "One historical concern.",
                     "findings": [
                         {
-                            "severity": "warning",
+                            "severity": "medium",
                             "title": "Historical bug remains",
                             "explanation": "The merged code contains a bug marker.",
                             "impact": "The merged behavior can fail.",

@@ -1,19 +1,41 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://codepreflight.dev/protocol/v3/schema.json",
+  "$id": "https://codepreflight.dev/protocol/v4/schema.json",
   "title": "CodePreFlight engine protocol",
-  "oneOf": [
-    { "$ref": "#/$defs/request" },
-    { "$ref": "#/$defs/event" }
-  ],
+  "oneOf": [{ "$ref": "#/$defs/request" }, { "$ref": "#/$defs/event" }],
   "$defs": {
     "request": {
       "type": "object",
-      "required": ["protocolVersion", "requestId", "command", "repositoryPath", "payload"],
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "command",
+        "repositoryPath",
+        "payload"
+      ],
       "properties": {
-        "protocolVersion": { "const": 3 },
+        "protocolVersion": { "const": 4 },
         "requestId": { "type": "string", "minLength": 1 },
-        "command": { "enum": ["automation", "cache", "commit", "doctor", "explain", "git_action", "hooks", "init", "panel_review", "pr_prepare", "provider", "providers", "review", "scan", "status", "workspace"] },
+        "command": {
+          "enum": [
+            "automation",
+            "cache",
+            "commit",
+            "doctor",
+            "explain",
+            "git_action",
+            "hooks",
+            "init",
+            "panel_review",
+            "pr_prepare",
+            "provider",
+            "providers",
+            "review",
+            "scan",
+            "status",
+            "workspace"
+          ]
+        },
         "repositoryPath": { "type": "string", "minLength": 1 },
         "payload": { "type": "object" }
       },
@@ -23,9 +45,27 @@
       "type": "object",
       "required": ["protocolVersion", "requestId", "event"],
       "properties": {
-        "protocolVersion": { "const": 3 },
+        "protocolVersion": { "const": 4 },
         "requestId": { "type": "string" },
-        "event": { "enum": ["ready", "progress", "consent_required", "provider_delta", "finding", "job_update", "recovery_required", "scan_progress", "workflow_stage", "operation_started", "operation_completed", "operation_skipped", "readiness_changed", "complete", "error"] },
+        "event": {
+          "enum": [
+            "ready",
+            "progress",
+            "consent_required",
+            "provider_delta",
+            "finding",
+            "job_update",
+            "recovery_required",
+            "scan_progress",
+            "workflow_stage",
+            "operation_started",
+            "operation_completed",
+            "operation_skipped",
+            "readiness_changed",
+            "complete",
+            "error"
+          ]
+        },
         "payload": { "type": "object" },
         "error": {
           "type": "object",
@@ -37,6 +77,205 @@
             "details": { "type": "object" }
           },
           "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "severity": {
+      "enum": ["critical", "high", "medium", "low"]
+    },
+    "findingLifecycle": {
+      "enum": ["open", "needs_rereview", "resolved", "dismissed"]
+    },
+    "verificationState": {
+      "enum": ["verified", "partially_verified", "unverified", "rejected"]
+    },
+    "evidenceLocation": {
+      "type": "object",
+      "required": ["path", "start_line", "end_line"],
+      "properties": {
+        "path": { "type": "string" },
+        "start_line": { "type": "integer", "minimum": 1 },
+        "end_line": { "type": "integer", "minimum": 1 },
+        "symbol": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "severity",
+        "lifecycle",
+        "category",
+        "title",
+        "explanation",
+        "impact",
+        "confidence",
+        "verification",
+        "verification_notes",
+        "evidence",
+        "recommendation",
+        "suggested_tests"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "severity": { "$ref": "#/$defs/severity" },
+        "lifecycle": { "$ref": "#/$defs/findingLifecycle" },
+        "category": { "type": "string" },
+        "title": { "type": "string" },
+        "explanation": { "type": "string" },
+        "impact": { "type": "string" },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "verification": { "$ref": "#/$defs/verificationState" },
+        "verification_notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceLocation" }
+        },
+        "recommendation": { "type": "string" },
+        "suggested_tests": { "type": "array", "items": { "type": "string" } },
+        "legacy_severity": {
+          "enum": ["warning", "suggestion", "informational", null]
+        }
+      },
+      "additionalProperties": false
+    },
+    "gitRisk": {
+      "enum": ["low", "medium", "high", "irreversible"]
+    },
+    "gitOperationPlan": {
+      "type": "object",
+      "required": [
+        "id",
+        "action",
+        "commands",
+        "fingerprint",
+        "risk",
+        "confirmation"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "action": { "type": "string" },
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "fingerprint": { "type": "string" },
+        "risk": { "$ref": "#/$defs/gitRisk" },
+        "confirmation": { "enum": ["explicit", "typed"] },
+        "head_oid": { "type": ["string", "null"] },
+        "index_fingerprint": { "type": ["string", "null"] },
+        "worktree_fingerprint": { "type": ["string", "null"] },
+        "refs": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "selected_paths": { "type": "array", "items": { "type": "string" } },
+        "selected_hunks": { "type": "array", "items": { "type": "string" } },
+        "source": { "type": ["string", "null"] },
+        "destination": { "type": ["string", "null"] },
+        "expected_effects": { "type": "array", "items": { "type": "string" } },
+        "expected_conflicts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "hook_involvement": { "type": "boolean" },
+        "editor_involvement": { "type": "boolean" },
+        "credential_helper_involvement": { "type": "boolean" },
+        "recovery_limitations": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "gitOperationResult": {
+      "type": "object",
+      "required": ["plan_id", "action", "status", "message"],
+      "properties": {
+        "plan_id": { "type": "string" },
+        "action": { "type": "string" },
+        "status": {
+          "enum": ["completed", "failed", "cancelled", "conflicted"]
+        },
+        "message": { "type": "string" },
+        "exit_code": { "type": ["integer", "null"] },
+        "repository": { "$ref": "#/$defs/repositoryView" },
+        "conflict": {
+          "anyOf": [{ "$ref": "#/$defs/conflictState" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "conflictState": {
+      "type": "object",
+      "required": ["operation", "files", "can_continue", "can_abort"],
+      "properties": {
+        "operation": { "type": "string" },
+        "files": { "type": "array", "items": { "type": "string" } },
+        "can_continue": { "type": "boolean" },
+        "can_abort": { "type": "boolean" },
+        "editor_available": { "type": "boolean" },
+        "mergetool_available": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "fileChange": {
+      "type": "object",
+      "required": [
+        "path",
+        "kind",
+        "staged",
+        "unstaged",
+        "untracked",
+        "ignored"
+      ],
+      "properties": {
+        "path": { "type": "string" },
+        "kind": { "type": "string" },
+        "staged": { "type": "boolean" },
+        "unstaged": { "type": "boolean" },
+        "untracked": { "type": "boolean" },
+        "ignored": { "type": "boolean" },
+        "previous_path": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "repositoryView": {
+      "type": "object",
+      "required": [
+        "root",
+        "branch",
+        "base_branch",
+        "upstream",
+        "ahead",
+        "behind",
+        "files",
+        "conflicts"
+      ],
+      "properties": {
+        "root": { "type": "string" },
+        "branch": { "type": ["string", "null"] },
+        "base_branch": { "type": ["string", "null"] },
+        "upstream": { "type": ["string", "null"] },
+        "ahead": { "type": "integer" },
+        "behind": { "type": "integer" },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/fileChange" } },
+        "conflicts": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "workspaceView": {
+      "type": "object",
+      "required": ["repository", "findings", "mode"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repositoryView" },
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+        "mode": { "enum": ["manual", "auto", "auto_plus"] },
+        "provider": { "type": ["object", "null"] },
+        "active_plan": {
+          "anyOf": [{ "$ref": "#/$defs/gitOperationPlan" }, { "type": "null" }]
         }
       },
       "additionalProperties": false

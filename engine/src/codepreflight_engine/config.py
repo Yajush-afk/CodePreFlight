@@ -12,6 +12,14 @@ from .git import GitRunner
 from .models import CheckDefinition
 
 SECRET_FRAGMENTS = ("api_key", "apikey", "token", "secret", "password", "credential")
+LEGACY_SEVERITY_MAP = {
+    "warning": "high",
+    "suggestion": "medium",
+    "informational": "low",
+}
+CONFIG_SEVERITIES = Literal[
+    "critical", "high", "medium", "low", "warning", "suggestion", "informational"
+]
 
 
 class ConfigModel(BaseModel):
@@ -23,9 +31,7 @@ class ReviewSettings(ConfigModel):
     depth: Literal["fast", "standard", "deep"] | None = None
     context_limit: int | None = Field(default=None, ge=4_000, le=1_000_000)
     policy: Literal["informational", "warning", "block"] | None = None
-    block_severities: list[Literal["critical", "warning", "suggestion", "informational"]] | None = (
-        None
-    )
+    block_severities: list[CONFIG_SEVERITIES] | None = None
 
 
 class ProviderSettings(ConfigModel):
@@ -141,6 +147,25 @@ def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def normalize_severity(value: str) -> str:
+    return LEGACY_SEVERITY_MAP.get(value, value)
+
+
+def _normalize_legacy_config(config: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(config)
+    review = normalized.get("review")
+    if not isinstance(review, dict):
+        return normalized
+    normalized_review = dict(review)
+    severities = normalized_review.get("block_severities")
+    if isinstance(severities, list):
+        normalized_review["block_severities"] = [
+            normalize_severity(str(item)) for item in severities
+        ]
+    normalized["review"] = normalized_review
+    return normalized
+
+
 def load_config(root: Path) -> dict[str, Any]:
     global_config = _read_toml(global_config_path())
     repository_config = _read_toml(repository_config_path(root))
@@ -156,7 +181,7 @@ def load_config(root: Path) -> dict[str, Any]:
         CodePreflightConfig.model_validate(merged)
     except ValidationError as error:
         _raise_validation_error(error, code="invalid_config")
-    return merged
+    return _normalize_legacy_config(merged)
 
 
 def _raise_validation_error(error: ValidationError, *, code: str, path: Path | None = None) -> None:

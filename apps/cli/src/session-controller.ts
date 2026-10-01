@@ -761,13 +761,7 @@ export class SessionController {
 
   private findingFilterSuggestions(): Suggestion[] {
     const findings = this.lastReview?.findings ?? [];
-    const filters = [
-      "all",
-      "critical",
-      "warning",
-      "suggestion",
-      "informational",
-    ];
+    const filters = ["all", "critical", "high", "medium", "low"];
     return filters.map((filter) => {
       const count =
         filter === "all"
@@ -2115,11 +2109,11 @@ export class SessionController {
       });
       return;
     }
-    const valid = ["all", "critical", "warning", "suggestion", "informational"];
+    const valid = ["all", "critical", "high", "medium", "low"];
     if (!valid.includes(filter)) {
       this.append({
         kind: "error",
-        body: "Use /findings [all|critical|warning|suggestion|informational].",
+        body: "Use /findings [all|critical|high|medium|low].",
       });
       return;
     }
@@ -2129,7 +2123,7 @@ export class SessionController {
       overlay: {
         kind: "findings",
         title: `Findings · ${filter} · ${rows.length} shown`,
-        body: `${presenter.summary(findings)}\nFilter with /findings critical, warning, suggestion, or all. Select a row for evidence and follow-up.`,
+        body: `${presenter.summary(findings)}\nFilter with /findings critical, high, medium, low, or all. Select a row for evidence and follow-up.`,
         items: rows.map((row) => ({
           label: row.label,
           value: String(row.index),
