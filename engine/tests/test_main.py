@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from conftest import git
+
 from codepreflight_engine.main import handle_line
 
 
@@ -109,3 +111,31 @@ def test_findings_request_returns_private_branch_queue(
 
     assert event["event"] == "complete"
     assert event["payload"] == {"items": []}
+
+
+def test_git_action_request_returns_a_non_mutating_stage_plan(
+    git_repository: Path, capsys: object, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    (git_repository / "feature.py").write_text("value = 1\n", encoding="utf-8")
+    handle_line(
+        json.dumps(
+            {
+                "protocolVersion": 4,
+                "requestId": "git-plan-1",
+                "command": "git_action",
+                "repositoryPath": str(git_repository),
+                "payload": {
+                    "action": "plan",
+                    "operation": "stage_files",
+                    "paths": ["feature.py"],
+                },
+            }
+        )
+    )
+    event = json.loads(capsys.readouterr().out.splitlines()[-1])  # type: ignore[attr-defined]
+
+    assert event["event"] == "complete"
+    assert event["payload"]["action"] == "stage_files"
+    assert event["payload"]["selected_paths"] == ["feature.py"]
+    assert git(git_repository, "diff", "--cached", "--name-only") == ""

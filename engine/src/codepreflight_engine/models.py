@@ -329,6 +329,8 @@ class GitOperationPlan(StrictModel):
     editor_involvement: bool = False
     credential_helper_involvement: bool = False
     recovery_limitations: list[str] = Field(default_factory=list)
+    preview: str | None = None
+    expires_at: str | None = None
 
 
 class ConflictState(StrictModel):

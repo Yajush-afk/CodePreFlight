@@ -315,7 +315,9 @@
         "recovery_limitations": {
           "type": "array",
           "items": { "type": "string" }
-        }
+        },
+        "preview": { "type": ["string", "null"] },
+        "expires_at": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },

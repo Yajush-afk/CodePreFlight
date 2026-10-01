@@ -100,6 +100,27 @@ async function requestFindings(
   }
 }
 
+async function requestGitAction(
+  payload: Record<string, unknown>,
+  json: boolean,
+): Promise<unknown> {
+  try {
+    const result = await client.request(
+      "git_action",
+      resolve(process.cwd()),
+      payload,
+    );
+    printValue(result, json);
+    return result;
+  } catch (error) {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 2;
+    return undefined;
+  }
+}
+
 program
   .name("preflight")
   .description(
@@ -361,6 +382,109 @@ for (const action of ["tree", "branches", "commits", "pr"] as const) {
       }
     });
 }
+
+const gitControls = program
+  .command("git")
+  .description("preview and execute guarded Git operations");
+
+for (const action of ["stage", "unstage", "discard"] as const) {
+  gitControls
+    .command(`${action} <paths...>`)
+    .description(`${action} selected repository files through a stored preview`)
+    .option("--json", "print machine-readable JSON")
+    .action(async (paths: string[], options: { json?: boolean }) => {
+      const operations = {
+        stage: "stage_files",
+        unstage: "unstage_files",
+        discard: "discard_worktree",
+      } as const;
+      await requestGitAction(
+        { action: "plan", operation: operations[action], paths },
+        Boolean(options.json),
+      );
+    });
+}
+
+gitControls
+  .command("hunks <path>")
+  .description("list selectable diff hunks for one changed file")
+  .option("--staged", "inspect staged hunks instead of unstaged hunks")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (path: string, options: { staged?: boolean; json?: boolean }) => {
+      await requestGitAction(
+        {
+          action: "hunks",
+          path,
+          area: options.staged ? "staged" : "unstaged",
+        },
+        Boolean(options.json),
+      );
+    },
+  );
+
+for (const action of ["stage-hunks", "unstage-hunks"] as const) {
+  gitControls
+    .command(`${action} <path> <hunkIds...>`)
+    .description(`${action.replace("-", " ")} through a stored preview`)
+    .option("--json", "print machine-readable JSON")
+    .action(
+      async (path: string, hunkIds: string[], options: { json?: boolean }) => {
+        await requestGitAction(
+          {
+            action: "plan",
+            operation:
+              action === "stage-hunks" ? "stage_hunks" : "unstage_hunks",
+            path,
+            hunkIds,
+          },
+          Boolean(options.json),
+        );
+      },
+    );
+}
+
+gitControls
+  .command("commit")
+  .description("preview a commit with an editable multiline message")
+  .requiredOption("--message <message>", "complete commit subject and body")
+  .option("--json", "print machine-readable JSON")
+  .action(async (options: { message: string; json?: boolean }) => {
+    await requestGitAction(
+      { action: "plan", operation: "commit", message: options.message },
+      Boolean(options.json),
+    );
+  });
+
+gitControls
+  .command("execute <planId>")
+  .description("execute an unchanged stored Git preview")
+  .option("--yes", "approve the exact stored plan")
+  .option("--confirm <value>", "typed confirmation for irreversible actions")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (
+      planId: string,
+      options: { yes?: boolean; confirm?: string; json?: boolean },
+    ) => {
+      if (!options.yes) {
+        process.stderr.write(
+          "Execution requires --yes after reviewing the plan.\n",
+        );
+        process.exitCode = 3;
+        return;
+      }
+      await requestGitAction(
+        {
+          action: "execute",
+          planId,
+          approved: true,
+          confirmation: options.confirm,
+        },
+        Boolean(options.json),
+      );
+    },
+  );
 
 const findings = program
   .command("findings")

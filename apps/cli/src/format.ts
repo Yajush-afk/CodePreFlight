@@ -1,9 +1,11 @@
+import { sanitizeTerminalText } from "./terminal-text.js";
+
 export function printValue(value: unknown, json: boolean): void {
   if (json) {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
     return;
   }
-  process.stdout.write(`${formatHuman(value)}\n`);
+  process.stdout.write(`${sanitizeTerminalText(formatHuman(value))}\n`);
 }
 
 interface ReviewView {

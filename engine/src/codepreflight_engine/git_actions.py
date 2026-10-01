@@ -5,6 +5,7 @@ from typing import Any
 
 from .errors import CodePreflightError
 from .git import GitRunner
+from .git_operations import GitOperationService
 from .repository import RepositoryInspector
 from .request_values import request_flag
 
@@ -16,6 +17,15 @@ class GitActions:
         root = GitRunner(path).root()
         action = str(payload.get("action", ""))
         branch = str(payload.get("branch", ""))
+        service = GitOperationService(root)
+        if action == "plan":
+            plan = service.plan(str(payload.get("operation", "")), payload)
+            return plan.model_dump(mode="json")
+        if action == "execute":
+            result = service.execute(str(payload.get("planId", "")), payload)
+            return result.model_dump(mode="json")
+        if action == "hunks":
+            return service.hunks(str(payload.get("path", "")), str(payload.get("area", "")))
         if action == "switch_preview":
             return self._preview(root, branch)
         if action == "switch_execute":
@@ -55,7 +65,8 @@ class GitActions:
                 "repository": snapshot.model_dump(mode="json"),
             }
         raise CodePreflightError(
-            "invalid_git_action", "Git action must be switch_preview or switch_execute"
+            "invalid_git_action",
+            "Git action must be plan, execute, hunks, switch_preview, or switch_execute",
         )
 
     def _preview(self, root: Path, branch: str) -> dict[str, Any]:
