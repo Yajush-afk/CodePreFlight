@@ -76,7 +76,7 @@ describe("EngineClient process protocol", () => {
 import { rmSync, writeFileSync } from "node:fs";
 process.on("SIGTERM", () => { rmSync(${JSON.stringify(marker)}, {force:true}); process.exit(0); });
 writeFileSync(${JSON.stringify(marker)}, "active");
-process.stdout.write(JSON.stringify({protocolVersion:3,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.stdout.write(JSON.stringify({protocolVersion:4,requestId:"",event:"ready",payload:{}}) + "\\n");
 process.stdin.resume();
 `,
     );
@@ -144,10 +144,10 @@ process.stdin.resume();
     writeFileSync(
       engine,
       `#!/usr/bin/env node
-process.stdout.write(JSON.stringify({protocolVersion:3,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.stdout.write(JSON.stringify({protocolVersion:4,requestId:"",event:"ready",payload:{}}) + "\\n");
 process.stdin.on("data", chunk => {
   const request = JSON.parse(chunk.toString());
-  process.stdout.write(JSON.stringify({protocolVersion:3,requestId:request.requestId,event:"error",error:{code:"provider_model_missing",message:"Model missing",recoverable:true,details:{actions:[{type:"pull_ollama_model",provider:"ollama",model:"qwen2.5-coder:7b"}]}}}) + "\\n");
+  process.stdout.write(JSON.stringify({protocolVersion:4,requestId:request.requestId,event:"error",error:{code:"provider_model_missing",message:"Model missing",recoverable:true,details:{actions:[{type:"pull_ollama_model",provider:"ollama",model:"qwen2.5-coder:7b"}]}}}) + "\\n");
 });
 `,
     );
@@ -177,12 +177,12 @@ process.stdin.on("data", chunk => {
     writeFileSync(
       engine,
       `#!/usr/bin/env node
-process.stdout.write(JSON.stringify({protocolVersion:3,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.stdout.write(JSON.stringify({protocolVersion:4,requestId:"",event:"ready",payload:{}}) + "\\n");
 process.stdin.on("data", chunk => {
   const request = JSON.parse(chunk.toString());
-  process.stdout.write(JSON.stringify({protocolVersion:3,requestId:request.requestId,event:"scan_progress",payload:{stage:"review",status:"started",batch:2,batches:4,completedBatches:1,message:"Reviewing batch 2 of 4"}}) + "\\n");
-  const heartbeat = setInterval(() => process.stdout.write(JSON.stringify({protocolVersion:3,requestId:request.requestId,event:"progress",payload:{kind:"provider_heartbeat",actor:"Provider",elapsedMs:20,message:"Provider process is still running"}}) + "\\n"), 20);
-  setTimeout(() => { clearInterval(heartbeat); process.stdout.write(JSON.stringify({protocolVersion:3,requestId:request.requestId,event:"complete",payload:{status:"completed"}}) + "\\n"); }, 130);
+  process.stdout.write(JSON.stringify({protocolVersion:4,requestId:request.requestId,event:"scan_progress",payload:{stage:"review",status:"started",batch:2,batches:4,completedBatches:1,message:"Reviewing batch 2 of 4"}}) + "\\n");
+  const heartbeat = setInterval(() => process.stdout.write(JSON.stringify({protocolVersion:4,requestId:request.requestId,event:"progress",payload:{kind:"provider_heartbeat",actor:"Provider",elapsedMs:20,message:"Provider process is still running"}}) + "\\n"), 20);
+  setTimeout(() => { clearInterval(heartbeat); process.stdout.write(JSON.stringify({protocolVersion:4,requestId:request.requestId,event:"complete",payload:{status:"completed"}}) + "\\n"); }, 130);
 });
 `,
     );
@@ -208,10 +208,10 @@ process.stdin.on("data", chunk => {
     writeFileSync(
       engine,
       `#!/usr/bin/env node
-process.stdout.write(JSON.stringify({protocolVersion:3,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.stdout.write(JSON.stringify({protocolVersion:4,requestId:"",event:"ready",payload:{}}) + "\\n");
 process.stdin.on("data", chunk => {
   const request = JSON.parse(chunk.toString());
-  process.stdout.write(JSON.stringify({protocolVersion:3,requestId:request.requestId,event:"scan_progress",payload:{stage:"review",status:"started",batch:4,batches:7,completedBatches:3,message:"Reviewing batch 4 of 7"}}) + "\\n");
+  process.stdout.write(JSON.stringify({protocolVersion:4,requestId:request.requestId,event:"scan_progress",payload:{stage:"review",status:"started",batch:4,batches:7,completedBatches:3,message:"Reviewing batch 4 of 7"}}) + "\\n");
 });
 setInterval(() => {}, 1000);
 `,
@@ -243,11 +243,11 @@ setInterval(() => {}, 1000);
     writeFileSync(
       engine,
       `#!/usr/bin/env node
-process.stdout.write(JSON.stringify({protocolVersion:3,requestId:"",event:"ready",payload:{}}) + "\\n");
+process.stdout.write(JSON.stringify({protocolVersion:4,requestId:"",event:"ready",payload:{}}) + "\\n");
 process.stdin.on("data", chunk => {
   const request = JSON.parse(chunk.toString());
-  process.stdout.write(JSON.stringify({protocolVersion:3,requestId:request.requestId,event:"scan_progress",payload:{stage:"review",status:"started",batch:4,batches:7,completedBatches:3}}) + "\\n");
-  process.stdout.write(JSON.stringify({protocolVersion:3,requestId:request.requestId,event:"error",error:{code:"provider_timeout",message:"Provider timed out after 180 seconds",recoverable:true}}) + "\\n");
+  process.stdout.write(JSON.stringify({protocolVersion:4,requestId:request.requestId,event:"scan_progress",payload:{stage:"review",status:"started",batch:4,batches:7,completedBatches:3}}) + "\\n");
+  process.stdout.write(JSON.stringify({protocolVersion:4,requestId:request.requestId,event:"error",error:{code:"provider_timeout",message:"Provider timed out after 180 seconds",recoverable:true}}) + "\\n");
 });
 `,
     );

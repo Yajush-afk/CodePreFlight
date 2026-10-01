@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .protocol_generated import EngineCommand, EngineEventName, ProtocolVersion
+from .protocol_generated import PROTOCOL_VERSION, EngineCommand, EngineEventName, ProtocolVersion
 
 
 class StrictModel(BaseModel):
@@ -28,7 +28,7 @@ class EngineFailure(StrictModel):
 
 
 class EngineEvent(StrictModel):
-    protocolVersion: ProtocolVersion = 3
+    protocolVersion: ProtocolVersion = PROTOCOL_VERSION
     requestId: str
     event: EngineEventName
     payload: dict[str, Any] | None = None
@@ -226,9 +226,16 @@ class ReviewPreparation(StrictModel):
 
 class Severity(StrEnum):
     CRITICAL = "critical"
-    WARNING = "warning"
-    SUGGESTION = "suggestion"
-    INFORMATIONAL = "informational"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class FindingLifecycle(StrEnum):
+    OPEN = "open"
+    NEEDS_REREVIEW = "needs_rereview"
+    RESOLVED = "resolved"
+    DISMISSED = "dismissed"
 
 
 class Confidence(StrEnum):
@@ -278,6 +285,70 @@ class Finding(FindingDraft):
     id: str
     verification: VerificationState
     verification_notes: list[str] = Field(default_factory=list)
+    lifecycle: FindingLifecycle = FindingLifecycle.OPEN
+    legacy_severity: Literal["warning", "suggestion", "informational"] | None = None
+
+
+class GitOperationRisk(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    IRREVERSIBLE = "irreversible"
+
+
+class GitConfirmation(StrEnum):
+    EXPLICIT = "explicit"
+    TYPED = "typed"
+
+
+class GitOperationPlan(StrictModel):
+    id: str
+    action: str
+    commands: list[str]
+    fingerprint: str
+    risk: GitOperationRisk
+    confirmation: GitConfirmation
+    head_oid: str | None = None
+    index_fingerprint: str | None = None
+    worktree_fingerprint: str | None = None
+    refs: dict[str, str] = Field(default_factory=dict)
+    selected_paths: list[str] = Field(default_factory=list)
+    selected_hunks: list[str] = Field(default_factory=list)
+    source: str | None = None
+    destination: str | None = None
+    expected_effects: list[str] = Field(default_factory=list)
+    expected_conflicts: list[str] = Field(default_factory=list)
+    hook_involvement: bool = False
+    editor_involvement: bool = False
+    credential_helper_involvement: bool = False
+    recovery_limitations: list[str] = Field(default_factory=list)
+
+
+class ConflictState(StrictModel):
+    operation: str
+    files: list[str]
+    can_continue: bool
+    can_abort: bool
+    editor_available: bool = False
+    mergetool_available: bool = False
+
+
+class GitOperationResult(StrictModel):
+    plan_id: str
+    action: str
+    status: Literal["completed", "failed", "cancelled", "conflicted"]
+    message: str
+    exit_code: int | None = None
+    repository: RepositorySnapshot | None = None
+    conflict: ConflictState | None = None
+
+
+class WorkspaceViewData(StrictModel):
+    repository: RepositorySnapshot
+    findings: list[Finding] = Field(default_factory=list)
+    mode: Literal["manual", "auto", "auto_plus"]
+    provider: ProviderDescriptor | None = None
+    active_plan: GitOperationPlan | None = None
 
 
 class ProviderReviewResponse(StrictModel):

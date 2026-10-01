@@ -61,7 +61,7 @@ def test_consensus_preserves_attribution_and_severity_disagreement() -> None:
     results = [
         PanelProviderResult(
             provider="alpha",
-            review=review("alpha", Severity.WARNING, "Missing return value"),
+            review=review("alpha", Severity.MEDIUM, "Missing return value"),
         ),
         PanelProviderResult(
             provider="beta",

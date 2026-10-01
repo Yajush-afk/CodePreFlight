@@ -20,6 +20,7 @@ def test_provider_schema_requires_every_object_property_for_codex() -> None:
     assert "default" not in evidence["properties"]["symbol"]
     finding = schema["$defs"]["FindingDraft"]
     assert finding["required"] == list(finding["properties"])
+    assert schema["$defs"]["Severity"]["enum"] == ["critical", "high", "medium", "low"]
 
 
 def test_follow_up_schema_requires_nullable_evidence_fields_for_codex() -> None:

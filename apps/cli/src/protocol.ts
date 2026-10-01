@@ -3,9 +3,114 @@ import {
   PROTOCOL_VERSION,
   type EngineCommand,
   type EngineEventName,
+  type FindingLifecycleState,
+  type FindingSeverity,
+  type GitOperationRisk,
 } from "./protocol.generated.js";
 
-export { PROTOCOL_VERSION, type EngineCommand } from "./protocol.generated.js";
+export {
+  PROTOCOL_VERSION,
+  type EngineCommand,
+  type FindingLifecycleState,
+  type FindingSeverity,
+  type GitOperationRisk,
+} from "./protocol.generated.js";
+
+export interface EvidenceContract {
+  path: string;
+  start_line: number;
+  end_line: number;
+  symbol?: string | null;
+}
+
+export interface FindingContract {
+  id: string;
+  severity: FindingSeverity;
+  lifecycle: FindingLifecycleState;
+  category: string;
+  title: string;
+  explanation: string;
+  impact: string;
+  confidence: "high" | "medium" | "low";
+  verification: "verified" | "partially_verified" | "unverified" | "rejected";
+  verification_notes: string[];
+  evidence: EvidenceContract[];
+  recommendation: string;
+  suggested_tests: string[];
+  legacy_severity?: "warning" | "suggestion" | "informational" | null;
+}
+
+export interface GitOperationPlanContract {
+  id: string;
+  action: string;
+  commands: string[];
+  fingerprint: string;
+  risk: GitOperationRisk;
+  confirmation: "explicit" | "typed";
+  head_oid?: string;
+  index_fingerprint?: string;
+  worktree_fingerprint?: string;
+  refs?: Record<string, string>;
+  selected_paths?: string[];
+  selected_hunks?: string[];
+  source?: string;
+  destination?: string;
+  expected_effects?: string[];
+  expected_conflicts?: string[];
+  hook_involvement?: boolean;
+  editor_involvement?: boolean;
+  credential_helper_involvement?: boolean;
+  recovery_limitations?: string[];
+}
+
+export interface ConflictStateContract {
+  operation: string;
+  files: string[];
+  can_continue: boolean;
+  can_abort: boolean;
+  editor_available?: boolean;
+  mergetool_available?: boolean;
+}
+
+export interface GitOperationResultContract {
+  plan_id: string;
+  action: string;
+  status: "completed" | "failed" | "cancelled" | "conflicted";
+  message: string;
+  exit_code?: number;
+  repository?: RepositoryViewContract;
+  conflict?: ConflictStateContract;
+}
+
+export interface FileChangeContract {
+  path: string;
+  kind: string;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+  ignored: boolean;
+  previous_path?: string | null;
+}
+
+export interface RepositoryViewContract {
+  root: string;
+  branch: string | null;
+  base_branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  files: FileChangeContract[];
+  conflicts: string[];
+  [key: string]: unknown;
+}
+
+export interface WorkspaceViewContract {
+  repository: RepositoryViewContract;
+  findings: FindingContract[];
+  mode: "manual" | "auto" | "auto_plus";
+  provider?: Record<string, unknown> | null;
+  active_plan?: GitOperationPlanContract | null;
+}
 
 export interface EngineRequest {
   protocolVersion: typeof PROTOCOL_VERSION;
@@ -47,7 +152,7 @@ export function parseEngineEvent(line: string): EngineEvent {
   const event = value as Partial<EngineEvent>;
   if (event.protocolVersion !== PROTOCOL_VERSION) {
     throw new EngineProtocolError(
-      `Unsupported engine protocol version: ${String(event.protocolVersion)}`,
+      `Unsupported engine protocol version: ${String(event.protocolVersion)}. Exit Preflight, rebuild or reinstall the matching engine and CLI, then restart.`,
     );
   }
   if (typeof event.requestId !== "string" || typeof event.event !== "string") {

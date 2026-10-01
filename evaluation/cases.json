@@ -6,7 +6,7 @@
       "id": "auth-validation-regression",
       "category": "authentication",
       "change": "An authentication endpoint removes token validation before creating a session.",
-      "expected": ["warning-or-critical correctness or security finding", "changed-line evidence"]
+      "expected": ["medium-or-higher correctness or security finding", "changed-line evidence"]
     },
     {
       "id": "schema-without-migration",

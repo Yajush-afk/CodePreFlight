@@ -54,7 +54,7 @@ def test_review_parses_and_verifies_findings(
                 "summary": "One concern.",
                 "findings": [
                     {
-                        "severity": "warning",
+                        "severity": "medium",
                         "title": "Feature always succeeds",
                         "explanation": "The function has no failure path.",
                         "impact": "Callers cannot detect failure.",

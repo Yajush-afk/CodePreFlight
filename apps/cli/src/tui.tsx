@@ -49,11 +49,11 @@ interface SessionViewProps {
   composerKey?: number;
 }
 
-const SEVERITY_COLORS: Record<string, "red" | "yellow" | "cyan" | "gray"> = {
+const SEVERITY_COLORS: Record<string, string> = {
   CRITICAL: "red",
-  WARNING: "yellow",
-  SUGGESTION: "cyan",
-  INFORMATIONAL: "gray",
+  HIGH: "#ff8700",
+  MEDIUM: "yellow",
+  LOW: "blue",
 };
 
 // Declarative terminal layout; keep workflow decisions in the controller.

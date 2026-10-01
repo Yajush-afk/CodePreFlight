@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { FindingsPresenter, type FindingView } from "./findings-presenter.js";
 
 const finding = (verification?: string): FindingView => ({
-  severity: "warning",
+  severity: "medium",
   title: "Example finding",
   verification,
 });
