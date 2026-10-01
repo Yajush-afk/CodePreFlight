@@ -48,9 +48,10 @@ export class GitGraphPresenter {
     for (const commit of graph.commits) {
       const row = this.topologyRow(commit, active, toneByOid);
       const references = this.references(graph, commit.oid);
-      const suffix = `${commit.subject}${references ? `  ${references}` : ""}`;
+      const subject = sanitizeTerminalText(commit.subject);
+      const suffix = `${subject}${references ? `  ${references}` : ""}`;
       const segments = this.topologySegments(row);
-      segments.push({ text: ` ${commit.subject}`, tone: "text" });
+      segments.push({ text: ` ${subject}`, tone: "text" });
       if (references)
         segments.push({ text: `  ${references}`, tone: commit.lane });
       output.push({
@@ -59,12 +60,15 @@ export class GitGraphPresenter {
         segments,
       });
     }
-    if (graph.note) output.push(this.plainLine(graph.note, "shared", true));
+    if (graph.note)
+      output.push(
+        this.plainLine(sanitizeTerminalText(graph.note), "shared", true),
+      );
     return output;
   }
 
   summary(graph: GitGraph): string {
-    return `${graph.lanes.map((item) => item.label).join(" ↔ ")} · local refs · /graph`;
+    return `${graph.lanes.map((item) => sanitizeTerminalText(item.label)).join(" ↔ ")} · local refs · /graph`;
   }
 
   private workingTreeLine(graph: GitGraph): GitGraphLine {
@@ -157,12 +161,12 @@ export class GitGraphPresenter {
     if (oid === graph.head) {
       references.push(
         graph.current === graph.base
-          ? `◉ ${graph.current}`
-          : `◆ ${graph.current}`,
+          ? `◉ ${sanitizeTerminalText(graph.current)}`
+          : `◆ ${sanitizeTerminalText(graph.current)}`,
       );
     }
     if (oid === graph.baseHead && graph.current !== graph.base)
-      references.push(`◉ ${graph.base}`);
+      references.push(`◉ ${sanitizeTerminalText(graph.base ?? "base")}`);
     if (oid === graph.mergeBase && graph.current !== graph.base)
       references.push("merge base");
     return references.join("  ");
@@ -176,3 +180,4 @@ export class GitGraphPresenter {
     };
   }
 }
+import { sanitizeTerminalText } from "./terminal-text.js";

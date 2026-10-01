@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -11,7 +10,7 @@ from typing import Any
 
 import pathspec
 
-from .activity import operation, publish
+from .activity import operation, publish, submit_with_activity
 from .adapters import ProviderRegistry
 from .checks import CheckRunner
 from .config import load_config
@@ -22,7 +21,9 @@ from .git import GitRunner
 from .models import CheckDefinition, ProviderKind
 from .readiness import ProviderHealth, provider_destination, review_readiness
 from .repository import RepositoryInspector
+from .request_values import request_flag
 from .secrets import redact_secrets, verify_with_external_scanner
+from .state_files import atomic_write_json, safe_read_text
 from .trust import is_trusted
 from .verification import FindingVerifier
 
@@ -314,16 +315,13 @@ class _ScanTools:
         if not path.exists():
             return None
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(safe_read_text(path))
         except (OSError, json.JSONDecodeError):
             return None
         return value if isinstance(value, dict) else None
 
     def _atomic_json(self, path: Path, value: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        temporary.replace(path)
+        atomic_write_json(path, value)
 
 
 class ScanPlanner(_ScanTools):
@@ -626,8 +624,14 @@ class ScanExecutor(_ScanTools):
                     if item is None:
                         return False
                     index, batch, path = item
-                future = pool.submit(
-                    self._review_one, adapter, plan["repository_map"], checks, batch, path
+                future = submit_with_activity(
+                    pool,
+                    self._review_one,
+                    adapter,
+                    plan["repository_map"],
+                    checks,
+                    batch,
+                    path,
                 )
                 active[future] = index
                 active_sources[index] = self._batch_sources(manifest, index)
@@ -818,7 +822,7 @@ class FullScanOrchestrator:
     """Protocol-facing scan workflow: previews are never implicit authorization."""
 
     def scan(self, path: Path, payload: dict[str, Any], emit: Any) -> dict[str, Any]:
-        if payload.get("fullScanApproved"):
+        if request_flag(payload, "fullScanApproved"):
             return ScanExecutor().execute(
                 path, payload, str(payload.get("planFingerprint", "")), approved=True, emit=emit
             )

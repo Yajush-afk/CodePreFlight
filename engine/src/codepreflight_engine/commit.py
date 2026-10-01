@@ -8,6 +8,7 @@ from typing import Any
 from .errors import CodePreflightError
 from .git import GitRunner
 from .models import CommitPreparation, ReviewResult
+from .request_values import request_flag
 from .review import EventEmitter, ReviewOrchestrator
 
 
@@ -33,7 +34,7 @@ def prepare_commit(root: Path, payload: dict[str, Any], emit: EventEmitter) -> C
 
 
 def create_commit(root: Path, payload: dict[str, Any]) -> dict[str, str]:
-    if not bool(payload.get("approved")):
+    if not request_flag(payload, "approved"):
         raise CodePreflightError("commit_not_approved", "Commit requires explicit approval")
     expected = str(payload.get("fingerprint", ""))
     actual = staged_fingerprint(root)
@@ -47,7 +48,7 @@ def create_commit(root: Path, payload: dict[str, Any]) -> dict[str, str]:
         raise CodePreflightError(
             "invalid_commit_message", "Commit message must be a non-empty single line"
         )
-    result = GitRunner(root).run("commit", "-m", message)
+    result = GitRunner(root).run("commit", "-m", message, mutability="mutating")
     commit_hash = GitRunner(root).run("rev-parse", "HEAD").stdout.strip()
     return {"commit": commit_hash, "message": message, "output": result.stdout.strip()}
 

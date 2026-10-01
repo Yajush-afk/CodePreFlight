@@ -32,6 +32,7 @@ from .providers import discover_providers
 from .pull_request import prepare_pull_request
 from .readiness import ProviderHealth, review_readiness
 from .repository import RepositoryInspector
+from .request_values import request_flag
 from .review import ReviewOrchestrator
 from .runtime_identity import RuntimeIdentity
 from .scan import FullScanOrchestrator
@@ -63,7 +64,7 @@ def _automation_status(request: EngineRequest, root: Path, manager: AutomationMa
 
 def _automation_configure(request: EngineRequest, root: Path, manager: AutomationManager) -> None:
     mode = str(request.payload.get("mode", "manual"))
-    write = bool(request.payload.get("write", False))
+    write = request_flag(request.payload, "write")
     result = manager.configure(mode, write=write)
     hook_manager = HookManager(root)
     hooks = []
@@ -81,7 +82,7 @@ def _automation_grant(request: EngineRequest, root: Path, manager: AutomationMan
     scope = manager.current_scope()
     complete(
         request.requestId,
-        manager.grant(scope, write=bool(request.payload.get("write", False))),
+        manager.grant(scope, write=request_flag(request.payload, "write")),
     )
     return
 
@@ -91,7 +92,7 @@ def _automation_revoke_grant(
 ) -> None:
     complete(
         request.requestId,
-        manager.revoke_grant(write=bool(request.payload.get("write", False))),
+        manager.revoke_grant(write=request_flag(request.payload, "write")),
     )
     return
 
@@ -342,7 +343,7 @@ def _handle_provider(request: EngineRequest, path: Path) -> None:
                     str(request.payload["variant"]) if request.payload.get("variant") else None
                 ),
                 scope=config_scope,
-                write=bool(request.payload.get("write", False)),
+                write=request_flag(request.payload, "write"),
             ),
         )
         return
@@ -392,7 +393,7 @@ def _handle_hooks(request: EngineRequest, path: Path) -> None:
     action = str(request.payload.get("action", "status"))
     hook = str(request.payload.get("hook", "pre-commit"))
     result = HookManager(Path(snapshot.root)).apply(
-        action, hook, write=bool(request.payload.get("write", False))
+        action, hook, write=request_flag(request.payload, "write")
     )
     complete(request.requestId, result)
     return
@@ -413,8 +414,8 @@ def _handle_init(request: EngineRequest, path: Path) -> None:
     init_root = RepositoryInspector().inspect(path).root
     result = initialize_repository(
         Path(init_root),
-        write=bool(request.payload.get("write", False)),
-        trust=bool(request.payload.get("trust", False)),
+        write=request_flag(request.payload, "write"),
+        trust=request_flag(request.payload, "trust"),
     )
     complete(request.requestId, result)
     return
@@ -528,12 +529,16 @@ def handle_line(line: str) -> None:
             repository_path=repository_path,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
-    except ValidationError as error:
+    except ValidationError:
         emit(
             EngineEvent(
                 requestId=request_id,
                 event="error",
-                error=EngineFailure(code="invalid_request", message=str(error), recoverable=False),
+                error=EngineFailure(
+                    code="invalid_request",
+                    message="Request did not match the CodePreflight protocol schema",
+                    recoverable=False,
+                ),
             )
         )
         log_operation(
@@ -565,12 +570,16 @@ def handle_line(line: str) -> None:
             duration_ms=int((time.monotonic() - started) * 1000),
             error_code=error.code,
         )
-    except Exception as error:  # defensive process boundary
+    except Exception:  # defensive process boundary
         emit(
             EngineEvent(
                 requestId=request_id,
                 event="error",
-                error=EngineFailure(code="internal_error", message=str(error), recoverable=False),
+                error=EngineFailure(
+                    code="internal_error",
+                    message="Unexpected engine failure; retry or inspect local diagnostics",
+                    recoverable=False,
+                ),
             )
         )
         log_operation(

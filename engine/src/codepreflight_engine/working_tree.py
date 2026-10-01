@@ -94,7 +94,8 @@ class WorkingTreeSnapshot:
             if not candidate.is_file():
                 unavailable[relative] = "non-regular file"
                 continue
-            raw = candidate.read_bytes()[: MAX_CONTEXT_FILE_BYTES + 1]
+            with candidate.open("rb") as handle:
+                raw = handle.read(MAX_CONTEXT_FILE_BYTES + 1)
             if len(raw) > MAX_CONTEXT_FILE_BYTES:
                 unavailable[relative] = f"file exceeds {MAX_CONTEXT_FILE_BYTES}-byte context limit"
             elif b"\0" in raw:

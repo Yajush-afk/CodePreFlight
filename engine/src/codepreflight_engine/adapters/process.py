@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from pathlib import Path
 
 from codepreflight_engine.activity import operation, publish
 from codepreflight_engine.errors import CodePreflightError
+from codepreflight_engine.processes import run_bounded_process
+from codepreflight_engine.secrets import redact_secrets
+
+MAX_PROVIDER_OUTPUT = 8_000_000
 
 ALLOWED_ENVIRONMENT = {
     "PATH",
@@ -58,21 +61,24 @@ def run_provider_process(
 ) -> subprocess.CompletedProcess[str]:
     try:
         with operation("Provider", "review", command, approval="approved") as record:
-            process = subprocess.Popen(
+            bounded = run_bounded_process(
                 command,
                 cwd=cwd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=environment or sanitized_environment(),
-            )
-            result = _communicate_with_heartbeats(
-                process,
-                command,
-                prompt,
                 timeout=timeout,
+                max_output_bytes=MAX_PROVIDER_OUTPUT,
+                environment=environment or sanitized_environment(),
+                input_text=prompt,
                 heartbeat_interval=heartbeat_interval,
+                on_heartbeat=_publish_heartbeat,
+            )
+            if bounded.truncated:
+                raise CodePreflightError(
+                    "provider_output_limit",
+                    "Provider output exceeded Preflight's bounded capture limit",
+                    recoverable=True,
+                )
+            result = subprocess.CompletedProcess(
+                command, bounded.returncode, bounded.stdout, bounded.stderr
             )
             record["exitCode"] = result.returncode
     except subprocess.TimeoutExpired as error:
@@ -84,7 +90,7 @@ def run_provider_process(
     except OSError as error:
         raise CodePreflightError("provider_process_error", str(error)) from error
     if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "provider command failed"
+        detail = _safe_provider_error(result.stderr)
         lowered = detail.lower()
         if "invalid_json_schema" in lowered or "invalid schema for response_format" in lowered:
             code = "provider_schema_rejected"
@@ -102,45 +108,24 @@ def run_provider_process(
     return result
 
 
-def _communicate_with_heartbeats(
-    process: subprocess.Popen[str],
-    command: list[str],
-    prompt: str,
-    *,
-    timeout: float,
-    heartbeat_interval: float,
-) -> subprocess.CompletedProcess[str]:
-    started = time.monotonic()
-    pending_input: str | None = prompt
-    while True:
-        elapsed = time.monotonic() - started
-        remaining = timeout - elapsed
-        if remaining <= 0:
-            process.kill()
-            process.communicate()
-            raise subprocess.TimeoutExpired(command, timeout)
-        try:
-            stdout, stderr = process.communicate(
-                input=pending_input,
-                timeout=min(max(heartbeat_interval, 0.01), remaining),
-            )
-            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-        except subprocess.TimeoutExpired as error:
-            pending_input = None
-            elapsed = time.monotonic() - started
-            if elapsed >= timeout:
-                process.kill()
-                process.communicate()
-                raise subprocess.TimeoutExpired(command, timeout) from error
-            publish(
-                "progress",
-                {
-                    "kind": "provider_heartbeat",
-                    "actor": "Provider",
-                    "elapsedMs": round(elapsed * 1000),
-                    "message": "Provider process is still running",
-                },
-            )
+def _publish_heartbeat(elapsed: float) -> None:
+    publish(
+        "progress",
+        {
+            "kind": "provider_heartbeat",
+            "actor": "Provider",
+            "elapsedMs": round(elapsed * 1000),
+            "message": "Provider process is still running",
+        },
+    )
+
+
+def _safe_provider_error(value: str) -> str:
+    if not value.strip():
+        return "provider command failed"
+    redacted = redact_secrets(value).content
+    redacted = redacted.replace("\x1b", "").replace("\x00", "")
+    return redacted.strip()[-2000:] or "provider command failed"
 
 
 def extract_json_event_text(output: str) -> str:

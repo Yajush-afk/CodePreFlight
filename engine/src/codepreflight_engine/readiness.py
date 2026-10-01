@@ -3,7 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
-import tempfile
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 from .config import personal_config_path
 from .errors import CodePreflightError
 from .models import ProviderDescriptor
+from .request_values import request_flag
+from .state_files import atomic_write_json, reject_symlink_path, safe_read_text
 
 
 def provider_destination(provider: ProviderDescriptor, config: dict[str, Any]) -> str:
@@ -47,7 +49,7 @@ def consent_fingerprint(provider: ProviderDescriptor, config: dict[str, Any]) ->
 def remote_approval_matches(
     provider: ProviderDescriptor, config: dict[str, Any], payload: dict[str, Any]
 ) -> bool:
-    return bool(payload.get("remoteApproved")) and (
+    return request_flag(payload, "remoteApproved") and (
         "consentScope" not in payload
         or payload["consentScope"] == consent_fingerprint(provider, config)
     )
@@ -93,7 +95,13 @@ class ProviderHealth:
 
     def _update(self, provider_id: str, value: dict[str, Any] | None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.with_suffix(".lock").open("a") as lock:
+        lock_path = self.path.with_suffix(".lock")
+        reject_symlink_path(lock_path.parent)
+        if lock_path.is_symlink():
+            raise CodePreflightError("unsafe_state_path", f"Refusing to use symlink: {lock_path}")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(lock_path, flags, 0o600)
+        with os.fdopen(descriptor, "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             records = self._read()
             if value is None:
@@ -104,20 +112,14 @@ class ProviderHealth:
 
     def _read(self) -> dict[str, Any]:
         try:
-            value = json.loads(self.path.read_text())
+            value = json.loads(safe_read_text(self.path))
             return value if isinstance(value, dict) else {}
         except (OSError, ValueError):
             return {}
 
     def _write(self, records: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode="w", dir=self.path.parent, delete=False) as handle:
-            temporary = Path(handle.name)
-            handle.write(json.dumps(records, sort_keys=True) + "\n")
-        try:
-            temporary.replace(self.path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write_json(self.path, records)
 
 
 def require_review_ready(

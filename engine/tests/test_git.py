@@ -16,3 +16,10 @@ def test_git_runner_rejects_output_over_configured_bound(git_repository: Path) -
         GitRunner(git_repository, max_output_bytes=50).run("show", "HEAD:large.txt")
 
     assert error.value.code == "git_output_limit"
+
+
+def test_mutating_git_command_requires_explicit_metadata(git_repository: Path) -> None:
+    with pytest.raises(CodePreflightError) as error:
+        GitRunner(git_repository).run("switch", "main")
+
+    assert error.value.code == "git_mutability_required"

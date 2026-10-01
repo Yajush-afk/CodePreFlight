@@ -41,6 +41,17 @@ def test_commit_requires_explicit_approval(git_repository: Path) -> None:
 
     assert error.value.code == "commit_not_approved"
 
+    with pytest.raises(CodePreflightError) as invalid:
+        create_commit(
+            git_repository,
+            {
+                "approved": "false",
+                "message": "feat: add feature",
+                "fingerprint": staged_fingerprint(git_repository),
+            },
+        )
+    assert invalid.value.code == "invalid_request_flag"
+
 
 def test_commit_rejects_changed_staged_content(git_repository: Path) -> None:
     source = git_repository / "feature.py"

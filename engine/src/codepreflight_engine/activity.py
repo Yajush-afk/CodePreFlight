@@ -8,7 +8,9 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import Executor, Future
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -17,24 +19,39 @@ import httpx
 
 from .secrets import redact_secrets
 
-_sink: Callable[[str, dict[str, Any]], None] | None = None
+ActivitySink = Callable[[str, dict[str, Any]], None]
+_sink: ContextVar[ActivitySink | None] = ContextVar("codepreflight_activity_sink", default=None)
 _lock = threading.RLock()
 
 
 @contextmanager
-def activity_scope(sink: Callable[[str, dict[str, Any]], None]) -> Iterator[None]:
-    global _sink
-    previous, _sink = _sink, sink
+def activity_scope(sink: ActivitySink) -> Iterator[None]:
+    token = _sink.set(sink)
     try:
         yield
     finally:
-        _sink = previous
+        _sink.reset(token)
 
 
 def publish(event: str, payload: dict[str, Any]) -> None:
+    sink = _sink.get()
     with _lock:
-        if _sink:
-            _sink(event, payload)
+        if sink:
+            sink(event, payload)
+
+
+def submit_with_activity(
+    executor: Executor, callback: Callable[..., Any], *args: Any, **kwargs: Any
+) -> Future[Any]:
+    sink = _sink.get()
+
+    def invoke() -> Any:
+        if sink is None:
+            return callback(*args, **kwargs)
+        with activity_scope(sink):
+            return callback(*args, **kwargs)
+
+    return executor.submit(invoke)
 
 
 def sanitized_command(command: list[str]) -> str:

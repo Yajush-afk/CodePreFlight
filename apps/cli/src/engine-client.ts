@@ -11,6 +11,7 @@ import {
   type EngineRequest,
 } from "./protocol.js";
 import { RequestActivityTracker } from "./request-activity.js";
+import { sanitizeTerminalText } from "./terminal-text.js";
 
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 5 * 60_000;
@@ -140,7 +141,7 @@ class EngineConnection {
 
   private observeProcess(): void {
     this.child.stderr.on("data", (chunk: Buffer) => {
-      const message = chunk.toString();
+      const message = sanitizeTerminalText(chunk.toString());
       this.diagnostics = (this.diagnostics + message).slice(
         -MAX_DIAGNOSTIC_CHARACTERS,
       );
@@ -254,7 +255,9 @@ class EngineConnection {
       pending.reject(
         new EngineRequestError(
           pending.activity.describeFailure(
-            event.error?.message ?? "Engine request failed",
+            sanitizeTerminalText(
+              event.error?.message ?? "Engine request failed",
+            ),
           ),
           event.error?.code,
           event.error?.recoverable,

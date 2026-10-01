@@ -165,6 +165,17 @@ def test_executor_requires_explicit_approval(git_repository: Path) -> None:
     assert error.value.code == "full_scan_confirmation_required"
 
 
+def test_full_scan_rejects_truthy_string_approval(git_repository: Path) -> None:
+    with pytest.raises(CodePreflightError) as error:
+        FullScanOrchestrator().scan(
+            git_repository,
+            {"fullScanApproved": "false", "planFingerprint": "anything"},
+            lambda *args: None,
+        )
+
+    assert error.value.code == "invalid_request_flag"
+
+
 def test_dirty_after_preview_is_stale_and_checks_cannot_change_approved_content(
     git_repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,14 +1,11 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { sanitizeTerminalText } from "./terminal-text.js";
 
 interface Segment {
   text: string;
   bold?: boolean;
   code?: boolean;
-}
-
-function safe(value: string): string {
-  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 function segments(value: string): Segment[] {
@@ -39,7 +36,7 @@ export function TerminalMarkdownLine({
   colorEnabled?: boolean;
   code?: boolean;
 }): React.JSX.Element {
-  const clean = safe(value);
+  const clean = sanitizeTerminalText(value);
   const heading = /^(#{1,6})\s+(.+)$/.exec(clean);
   const bullet = /^[-*]\s+(.+)$/.exec(clean);
   const numbered = /^(\d+)\.\s+(.+)$/.exec(clean);
@@ -78,7 +75,7 @@ export function TerminalMarkdown({
   colorEnabled?: boolean;
 }): React.JSX.Element {
   let fenced = false;
-  const lines = safe(value)
+  const lines = sanitizeTerminalText(value)
     .split("\n")
     .flatMap((line) => {
       if (line.trim().startsWith("```")) {

@@ -31,4 +31,21 @@ describe("terminal markdown", () => {
     expect(view.lastFrame()).not.toContain("\u001b");
     view.unmount();
   });
+
+  it("removes OSC links, terminal titles, and non-printable controls", () => {
+    const view = render(
+      <TerminalMarkdown
+        value={
+          "safe\u001b]0;forged title\u0007 text \u001b]8;;https://example.test\u0007link\u001b]8;;\u0007 end\u0000"
+        }
+        height={2}
+      />,
+    );
+    const frame = view.lastFrame() ?? "";
+    expect(frame).toContain("safe text link end");
+    expect(frame).not.toContain("forged title");
+    expect(frame).not.toContain("example.test");
+    expect(frame).not.toContain("\u001b");
+    view.unmount();
+  });
 });

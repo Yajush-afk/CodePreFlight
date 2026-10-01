@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .activity import submit_with_activity
 from .base import BaseResolver
 from .config import load_config
 from .git import GitRunner
@@ -75,17 +76,17 @@ class RepositoryInspector:
         detached = None if branch else self._optional(git, "rev-parse", "--short", "HEAD")
         config = load_config(root)
         with ThreadPoolExecutor(max_workers=6, thread_name_prefix="preflight-git") as executor:
-            upstream_future = executor.submit(
-                self._optional, git, "rev-parse", "--abbrev-ref", "@{upstream}"
+            upstream_future = submit_with_activity(
+                executor, self._optional, git, "rev-parse", "--abbrev-ref", "@{upstream}"
             )
-            files_future = executor.submit(self._changes, git)
-            conflicts_future = executor.submit(self._conflicts, git)
-            remotes_future = executor.submit(self._remotes, git)
-            tracked_future = executor.submit(
-                lambda: git.run("ls-files", "-z", check=False).stdout.split("\0")
+            files_future = submit_with_activity(executor, self._changes, git)
+            conflicts_future = submit_with_activity(executor, self._conflicts, git)
+            remotes_future = submit_with_activity(executor, self._remotes, git)
+            tracked_future = submit_with_activity(
+                executor, lambda: git.run("ls-files", "-z", check=False).stdout.split("\0")
             )
-            base_future = executor.submit(
-                BaseResolver().resolve, root, config=config, required=False
+            base_future = submit_with_activity(
+                executor, BaseResolver().resolve, root, config=config, required=False
             )
             upstream = upstream_future.result()
             files = files_future.result()

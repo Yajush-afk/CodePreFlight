@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import urlsplit
 
+from .activity import submit_with_activity
 from .models import (
     AuthenticationState,
     InstallationState,
@@ -47,11 +48,11 @@ REQUIRED_FLAGS = {
 def discover_providers(config: dict[str, Any] | None = None) -> list[ProviderDescriptor]:
     config = config or {}
     with ThreadPoolExecutor(max_workers=len(CLI_PROVIDERS)) as executor:
-        providers = list(
-            executor.map(
-                lambda definition: _discover_cli_provider(definition, config), CLI_PROVIDERS
-            )
-        )
+        futures = [
+            submit_with_activity(executor, _discover_cli_provider, definition, config)
+            for definition in CLI_PROVIDERS
+        ]
+        providers = [future.result() for future in futures]
 
     api_key_env = str(
         config.get("providers", {})
@@ -99,8 +100,8 @@ def _discover_cli_provider(
     provider_config = config.get("providers", {}).get(executable, {})
     if path:
         with ThreadPoolExecutor(max_workers=2) as executor:
-            version_future = executor.submit(_version, executable)
-            health_future = executor.submit(_health, executable, provider_config)
+            version_future = submit_with_activity(executor, _version, executable)
+            health_future = submit_with_activity(executor, _health, executable, provider_config)
             version = version_future.result()
             capabilities = health_future.result()
     else:

@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from .errors import CodePreflightError
+from .state_files import atomic_write_bytes, reject_symlink_path
+
 MAX_LOG_BYTES = 1_000_000
 RETAIN_BYTES = 500_000
 
@@ -29,6 +32,9 @@ def log_operation(
     try:
         path = local_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
+        reject_symlink_path(path.parent)
+        if path.is_symlink() or path.parent.is_symlink():
+            return
         _rotate(path)
         record = {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -40,10 +46,13 @@ def log_operation(
         }
         if error_code:
             record["errorCode"] = error_code
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags, 0o600)
         with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, separators=(",", ":")) + "\n")
-    except OSError:
+    except (OSError, CodePreflightError):
         return
 
 
@@ -55,5 +64,4 @@ def _rotate(path: Path) -> None:
         tail = handle.read()
     first_newline = tail.find(b"\n")
     retained = tail[first_newline + 1 :] if first_newline >= 0 else b""
-    path.write_bytes(retained)
-    path.chmod(0o600)
+    atomic_write_bytes(path, retained)

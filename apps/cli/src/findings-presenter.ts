@@ -46,9 +46,9 @@ export class FindingsPresenter {
       )
       .map(({ finding, index }) => {
         const evidence = finding.evidence?.[0];
-        const path = evidence?.path ?? "no location";
+        const path = sanitizeTerminalText(evidence?.path ?? "no location");
         const place = `${path.length > 30 ? `…${path.slice(-29)}` : path}:${evidence?.start_line ?? "?"}`;
-        const title = finding.title ?? "Finding";
+        const title = sanitizeTerminalText(finding.title ?? "Finding");
         return {
           index,
           label: `${String(index).padStart(2)}  ${String(
@@ -92,3 +92,4 @@ export class FindingsPresenter {
     ].join("\n\n");
   }
 }
+import { sanitizeTerminalText } from "./terminal-text.js";

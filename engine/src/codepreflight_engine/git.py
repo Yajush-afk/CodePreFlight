@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
 
 from .activity import operation
 from .errors import CodePreflightError
+from .processes import run_bounded_process
 
 
 @dataclass(frozen=True)
@@ -23,14 +22,16 @@ class GitRunner:
         self.cwd = cwd
         self.max_output_bytes = max_output_bytes
 
-    def run(self, *args: str, check: bool = True, timeout: float = 20) -> GitResult:
-        mutating = bool(args and args[0] in {"commit", "switch", "update-ref"})
-        if args and args[0] == "config":
-            mutating = not any(
-                flag in args for flag in ("--get", "--get-all", "--get-regexp", "--list", "-l")
-            )
+    def run(
+        self,
+        *args: str,
+        check: bool = True,
+        timeout: float = 20,
+        mutability: str | None = None,
+    ) -> GitResult:
+        command_mutability = self._mutability(args, mutability)
         with operation(
-            "Git", "repository", ["git", *args], mutability="mutating" if mutating else "read_only"
+            "Git", "repository", ["git", *args], mutability=command_mutability
         ) as record:
             result = self._run(*args, check=check, timeout=timeout)
             record["exitCode"] = result.returncode
@@ -38,21 +39,12 @@ class GitRunner:
 
     def _run(self, *args: str, check: bool = True, timeout: float = 20) -> GitResult:
         try:
-            with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-                process = subprocess.Popen(
-                    ["git", *args],
-                    cwd=self.cwd,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                )
-                try:
-                    returncode = process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                    raise
-                stdout, stdout_truncated = self._read(stdout_file)
-                stderr, stderr_truncated = self._read(stderr_file)
+            completed = run_bounded_process(
+                ["git", *args],
+                cwd=self.cwd,
+                timeout=timeout,
+                max_output_bytes=self.max_output_bytes,
+            )
         except FileNotFoundError as error:
             raise CodePreflightError("git_not_found", "Git is not installed") from error
         except subprocess.TimeoutExpired as error:
@@ -61,10 +53,10 @@ class GitRunner:
             ) from error
 
         result = GitResult(
-            stdout,
-            stderr,
-            returncode,
-            truncated=stdout_truncated or stderr_truncated,
+            completed.stdout,
+            completed.stderr,
+            completed.returncode,
+            truncated=completed.truncated,
         )
         if result.truncated:
             raise CodePreflightError(
@@ -81,8 +73,64 @@ class GitRunner:
         result = self.run("rev-parse", "--show-toplevel")
         return Path(result.stdout.strip()).resolve()
 
-    def _read(self, handle: BinaryIO) -> tuple[str, bool]:
-        handle.seek(0)
-        content = handle.read(self.max_output_bytes + 1)
-        truncated = len(content) > self.max_output_bytes
-        return content[: self.max_output_bytes].decode("utf-8", errors="replace"), truncated
+    def _mutability(self, args: tuple[str, ...], declared: str | None) -> str:
+        if not args:
+            return "unknown"
+        command = args[0]
+        mutating = command in {
+            "add",
+            "am",
+            "branch",
+            "checkout",
+            "cherry-pick",
+            "clean",
+            "commit",
+            "fetch",
+            "merge",
+            "mv",
+            "pull",
+            "push",
+            "rebase",
+            "reset",
+            "restore",
+            "revert",
+            "rm",
+            "stash",
+            "switch",
+            "tag",
+            "update-index",
+            "update-ref",
+        } or (
+            command == "config"
+            and not any(
+                flag in args for flag in ("--get", "--get-all", "--get-regexp", "--list", "-l")
+            )
+        )
+        if mutating and declared is None:
+            raise CodePreflightError(
+                "git_mutability_required",
+                f"Git mutation `{command}` requires explicit action metadata",
+            )
+        if declared is not None:
+            return declared
+        if command in {
+            "blame",
+            "cat-file",
+            "diff",
+            "diff-tree",
+            "for-each-ref",
+            "log",
+            "ls-files",
+            "ls-tree",
+            "merge-base",
+            "name-rev",
+            "remote",
+            "rev-list",
+            "rev-parse",
+            "show",
+            "show-ref",
+            "status",
+            "symbolic-ref",
+        }:
+            return "read_only"
+        return "unknown"

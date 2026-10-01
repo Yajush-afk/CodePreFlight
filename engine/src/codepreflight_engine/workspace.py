@@ -157,7 +157,8 @@ class RepositoryWorkspace:
         git = GitRunner(root, max_output_bytes=MAX_FILE_CHARACTERS * 4)
         content = ""
         if candidate.is_file():
-            raw = candidate.read_bytes()[: MAX_FILE_CHARACTERS + 1]
+            with candidate.open("rb") as handle:
+                raw = handle.read(MAX_FILE_CHARACTERS + 1)
             if b"\0" in raw:
                 content = "(binary file)"
             else:
