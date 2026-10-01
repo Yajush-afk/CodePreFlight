@@ -28,22 +28,30 @@ class GitRunner:
         check: bool = True,
         timeout: float = 20,
         mutability: str | None = None,
+        input_text: str | None = None,
     ) -> GitResult:
         command_mutability = self._mutability(args, mutability)
         with operation(
             "Git", "repository", ["git", *args], mutability=command_mutability
         ) as record:
-            result = self._run(*args, check=check, timeout=timeout)
+            result = self._run(*args, check=check, timeout=timeout, input_text=input_text)
             record["exitCode"] = result.returncode
             return result
 
-    def _run(self, *args: str, check: bool = True, timeout: float = 20) -> GitResult:
+    def _run(
+        self,
+        *args: str,
+        check: bool = True,
+        timeout: float = 20,
+        input_text: str | None = None,
+    ) -> GitResult:
         try:
             completed = run_bounded_process(
                 ["git", *args],
                 cwd=self.cwd,
                 timeout=timeout,
                 max_output_bytes=self.max_output_bytes,
+                input_text=input_text,
             )
         except FileNotFoundError as error:
             raise CodePreflightError("git_not_found", "Git is not installed") from error

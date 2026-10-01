@@ -110,7 +110,14 @@ class FindingLedger:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def mark_paths_changed(self, branch: str, paths: list[str], commit: str) -> int:
+    def mark_paths_changed(
+        self,
+        branch: str,
+        paths: list[str],
+        commit: str,
+        *,
+        reason: str = "relevant_commit",
+    ) -> int:
         changed = sorted(set(paths))
         if not changed:
             return 0
@@ -137,7 +144,7 @@ class FindingLedger:
                     str(row["id"]),
                     str(row["lifecycle"]),
                     FindingLifecycle.NEEDS_REREVIEW.value,
-                    "relevant_commit",
+                    reason,
                     None,
                     commit,
                 )

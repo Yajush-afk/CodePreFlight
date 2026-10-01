@@ -121,6 +121,8 @@ export interface GitOperationPlanContract {
   editor_involvement?: boolean;
   credential_helper_involvement?: boolean;
   recovery_limitations?: string[];
+  preview?: string | null;
+  expires_at?: string | null;
 }
 
 export interface ConflictStateContract {
