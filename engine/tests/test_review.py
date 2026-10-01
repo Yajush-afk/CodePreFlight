@@ -8,7 +8,14 @@ from conftest import git
 from codepreflight_engine.adapters.base import ProviderAdapter
 from codepreflight_engine.adapters.fake import FakeProviderAdapter
 from codepreflight_engine.errors import CodePreflightError
-from codepreflight_engine.models import ProviderDescriptor, ProviderKind, ProviderState
+from codepreflight_engine.finding_ledger import FindingLedger
+from codepreflight_engine.models import (
+    ContextManifest,
+    ContextPackage,
+    ProviderDescriptor,
+    ProviderKind,
+    ProviderState,
+)
 from codepreflight_engine.review import ReviewOrchestrator
 from codepreflight_engine.trust import trust_repository
 
@@ -18,9 +25,11 @@ class FakeAdapter:
         self.descriptor = descriptor
         self.output = output
         self.calls = 0
+        self.prompts: list[str] = []
 
     def review(self, prompt: str, schema: dict[str, object]) -> str:
         self.calls += 1
+        self.prompts.append(prompt)
         return json.dumps(self.output)
 
 
@@ -162,6 +171,113 @@ def test_review_cache_avoids_repeating_provider_request(
     assert adapter.calls == 2
 
 
+def test_review_reconciles_prior_finding_only_after_explicit_evaluation(
+    git_repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = git_repository / "feature.py"
+    source.write_text("return broken\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    adapter = FakeAdapter(
+        descriptor(),
+        {
+            "summary": "One concern.",
+            "findings": [
+                {
+                    "severity": "high",
+                    "category": "bug",
+                    "title": "Broken result",
+                    "explanation": "The function returns the broken sentinel.",
+                    "impact": "Callers receive an invalid result.",
+                    "confidence": "high",
+                    "evidence": [
+                        {
+                            "path": "feature.py",
+                            "start_line": 1,
+                            "end_line": 1,
+                            "symbol": None,
+                        }
+                    ],
+                    "recommendation": "Return the corrected result.",
+                    "suggested_tests": [],
+                }
+            ],
+            "reconciliations": [],
+        },
+    )
+    install_adapter(monkeypatch, adapter)
+    first = ReviewOrchestrator().review_staged(
+        git_repository,
+        {"provider": "ollama", "noCache": True},
+        lambda event, payload: None,
+    )
+    finding_id = first.findings[0].id
+    ledger = FindingLedger(git_repository)
+    ledger.mark_paths_changed("main", ["feature.py"], ledger.current_commit())
+    source.write_text("return fixed\n", encoding="utf-8")
+    git(git_repository, "add", "feature.py")
+    adapter.output = {
+        "summary": "The prior issue is fixed.",
+        "findings": [],
+        "reconciliations": [
+            {
+                "finding_id": finding_id,
+                "outcome": "resolved",
+                "explanation": "The broken sentinel is no longer returned.",
+                "evidence": [
+                    {
+                        "path": "feature.py",
+                        "start_line": 1,
+                        "end_line": 1,
+                        "symbol": None,
+                    }
+                ],
+            }
+        ],
+    }
+
+    second = ReviewOrchestrator().review_staged(
+        git_repository,
+        {"provider": "ollama", "noCache": True},
+        lambda event, payload: None,
+    )
+
+    assert second.findings == []
+    assert finding_id in adapter.prompts[1]
+    assert "Never mark a prior finding resolved by omission" in adapter.prompts[1]
+    assert ledger.detail(finding_id)["finding"]["lifecycle"] == "resolved"
+
+
+def test_prior_finding_context_is_redacted_before_provider_transmission() -> None:
+    package = ContextPackage(
+        content="selected context",
+        manifest=ContextManifest(
+            entries=[],
+            total_characters=16,
+            limit_characters=10_000,
+            redactions=0,
+        ),
+        changed_files=["feature.py"],
+        checks=[],
+    )
+    enriched = ReviewOrchestrator()._with_prior_findings(  # noqa: SLF001
+        package,
+        [
+            {
+                "id": "cpf-sensitive",
+                "category": "security",
+                "path": "feature.py",
+                "title": "Credential exposure",
+                "explanation": 'api_key = "abcdefghijklmnopqrstuvwx" is exposed.',
+                "impact": "The credential could be abused.",
+            }
+        ],
+    )
+
+    assert "abcdefghijklmnopqrstuvwx" not in enriched.content
+    assert "[REDACTED]" in enriched.content
+    assert enriched.manifest.redactions == package.manifest.redactions + 1
+
+
 def test_review_repairs_malformed_structured_output_once(
     git_repository: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -208,6 +324,7 @@ def test_review_preserves_failed_provider_output_after_repair(
     assert result.failure.provider_response == "still not json"
     assert result.failure.attempts == 2
     assert len(adapter.requests) == 2
+    assert FindingLedger(git_repository).list(branch="main") == []
 
 
 @pytest.mark.parametrize(

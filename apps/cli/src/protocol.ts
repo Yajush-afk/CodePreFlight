@@ -40,6 +40,66 @@ export interface FindingContract {
   legacy_severity?: "warning" | "suggestion" | "informational" | null;
 }
 
+export interface FindingReconciliationContract {
+  finding_id: string;
+  outcome: "present" | "resolved" | "uncertain";
+  explanation: string;
+  evidence: EvidenceContract[];
+}
+
+export interface FindingLedgerItemContract {
+  id: string;
+  branch: string;
+  category: string;
+  path: string;
+  symbol: string;
+  title: string;
+  explanation: string;
+  impact: string;
+  recommendation: string;
+  severity: FindingSeverity;
+  legacy_severity: "warning" | "suggestion" | "informational" | null;
+  confidence: "high" | "medium" | "low";
+  verification: "verified" | "partially_verified" | "unverified" | "rejected";
+  lifecycle: FindingLifecycleState;
+  first_seen_snapshot: string;
+  last_seen_snapshot: string;
+  last_evaluated_snapshot: string | null;
+  last_commit: string;
+  target: string;
+  provider_id: string;
+  provider_model: string | null;
+  dismissal_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FindingOccurrenceContract {
+  review_id: string;
+  snapshot: string;
+  commit_oid: string;
+  target: string;
+  severity: FindingSeverity;
+  verification: FindingContract["verification"];
+  evidence: EvidenceContract[];
+  observed_at: string;
+}
+
+export interface FindingTransitionContract {
+  from_state: FindingLifecycleState;
+  to_state: FindingLifecycleState;
+  reason: string;
+  review_id?: string | null;
+  commit_oid?: string | null;
+  created_at: string;
+}
+
+export interface FindingDetailContract {
+  finding: FindingLedgerItemContract;
+  occurrences: FindingOccurrenceContract[];
+  transitions: FindingTransitionContract[];
+}
+
 export interface GitOperationPlanContract {
   id: string;
   action: string;

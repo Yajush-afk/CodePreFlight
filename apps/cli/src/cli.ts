@@ -79,6 +79,27 @@ function printFullScanManifest(event: EngineEvent): void {
   );
 }
 
+async function requestFindings(
+  payload: Record<string, unknown>,
+  json: boolean,
+): Promise<unknown> {
+  try {
+    const result = await client.request(
+      "findings",
+      resolve(process.cwd()),
+      payload,
+    );
+    printValue(result, json);
+    return result;
+  } catch (error) {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 2;
+    return undefined;
+  }
+}
+
 program
   .name("preflight")
   .description(
@@ -340,6 +361,92 @@ for (const action of ["tree", "branches", "commits", "pr"] as const) {
       }
     });
 }
+
+const findings = program
+  .command("findings")
+  .description("inspect the private branch-aware finding ledger")
+  .option(
+    "--state <state>",
+    "filter by open, needs_rereview, resolved, or dismissed",
+  )
+  .option("--branch <branch>", "inspect another local branch queue")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (options: { state?: string; branch?: string; json?: boolean }) => {
+      await requestFindings(
+        { action: "list", lifecycle: options.state, branch: options.branch },
+        Boolean(options.json),
+      );
+    },
+  );
+
+findings
+  .command("show <findingId>")
+  .description("show finding evidence and lifecycle history")
+  .option("--json", "print machine-readable JSON")
+  .action(async (findingId: string, options: { json?: boolean }) => {
+    await requestFindings(
+      { action: "detail", findingId },
+      Boolean(options.json),
+    );
+  });
+
+findings
+  .command("dismiss <findingId>")
+  .description("dismiss an accepted or inapplicable finding")
+  .requiredOption("--reason <reason>", "record the dismissal reason")
+  .option("--yes", "approve the lifecycle change after inspecting the finding")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (
+      findingId: string,
+      options: { reason: string; yes?: boolean; json?: boolean },
+    ) => {
+      if (!options.yes) {
+        await requestFindings(
+          { action: "detail", findingId },
+          Boolean(options.json),
+        );
+        process.stderr.write(
+          "Preview only; rerun with --yes to record this dismissal.\n",
+        );
+        return;
+      }
+      await requestFindings(
+        {
+          action: "dismiss",
+          findingId,
+          reason: options.reason,
+          approved: true,
+        },
+        Boolean(options.json),
+      );
+    },
+  );
+
+findings
+  .command("reopen <findingId>")
+  .description("reopen a dismissed finding")
+  .option("--yes", "approve the lifecycle change after inspecting the finding")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (findingId: string, options: { yes?: boolean; json?: boolean }) => {
+      if (!options.yes) {
+        await requestFindings(
+          { action: "detail", findingId },
+          Boolean(options.json),
+        );
+        process.stderr.write(
+          "Preview only; rerun with --yes to reopen this finding.\n",
+        );
+        return;
+      }
+      await requestFindings(
+        { action: "reopen", findingId, approved: true },
+        Boolean(options.json),
+      );
+    },
+  );
 
 program
   .command("switch <branch>")

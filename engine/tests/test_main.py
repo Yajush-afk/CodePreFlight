@@ -88,3 +88,24 @@ def test_workspace_request_returns_local_commits(
 
     assert event["event"] == "complete"
     assert event["payload"]["items"][0]["subject"] == "Initial commit"
+
+
+def test_findings_request_returns_private_branch_queue(
+    git_repository: Path, capsys: object, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    handle_line(
+        json.dumps(
+            {
+                "protocolVersion": 4,
+                "requestId": "findings-1",
+                "command": "findings",
+                "repositoryPath": str(git_repository),
+                "payload": {"action": "list"},
+            }
+        )
+    )
+    event = json.loads(capsys.readouterr().out.splitlines()[-1])  # type: ignore[attr-defined]
+
+    assert event["event"] == "complete"
+    assert event["payload"] == {"items": []}

@@ -6,6 +6,7 @@ export const ENGINE_COMMANDS = [
   "commit",
   "doctor",
   "explain",
+  "findings",
   "git_action",
   "hooks",
   "init",

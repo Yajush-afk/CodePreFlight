@@ -263,6 +263,8 @@ class _ScanTools:
             "Use severity critical, high, medium, or low: critical for severe security exposure, "
             "data loss, or major failure; high for substantial defects; medium for meaningful "
             "narrower-impact issues; low for minor defects or useful improvements. "
+            "Set reconciliations to an empty array because full-scan batches contain no prior "
+            "finding ledger. "
             "Cite only supplied file paths and original line "
             "numbers. Avoid style comments. Return only JSON matching the schema.\n\n"
             f"## Repository map\n{repository_map}\n\n"
