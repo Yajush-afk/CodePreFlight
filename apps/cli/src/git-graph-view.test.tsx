@@ -2,7 +2,7 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { expect, it } from "vitest";
 import { SessionView } from "./tui.js";
-import type { SessionState } from "./session-controller.js";
+import type { SessionState } from "./session-state.js";
 
 it("shows the display-only panel on wide terminals and summary on narrow ones", () => {
   const state: SessionState = {

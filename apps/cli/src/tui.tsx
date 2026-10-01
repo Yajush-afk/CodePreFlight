@@ -9,11 +9,8 @@ import {
   useCommandSuggestions,
   useScanClock,
 } from "./workspace-hooks.js";
-import {
-  SessionController,
-  type SessionState,
-  type SessionAction,
-} from "./session-controller.js";
+import { SessionController } from "./session-controller.js";
+import type { SessionAction, SessionState } from "./session-state.js";
 import type { Suggestion } from "./command-registry.js";
 import { TerminalSession, interactiveEffects } from "./terminal-session.js";
 import { WorkspacePresenter } from "./workspace-presenter.js";

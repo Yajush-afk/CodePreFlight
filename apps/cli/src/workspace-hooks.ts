@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useApp, useStdin, useStdout } from "ink";
 import { loginProvider } from "./provider-auth.js";
-import { SessionController, type SessionState } from "./session-controller.js";
+import { SessionController } from "./session-controller.js";
+import type { SessionState } from "./session-state.js";
 import type { Suggestion } from "./command-registry.js";
 import { TerminalSession } from "./terminal-session.js";
 
