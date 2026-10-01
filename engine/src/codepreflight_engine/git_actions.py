@@ -18,14 +18,9 @@ class GitActions:
         action = str(payload.get("action", ""))
         branch = str(payload.get("branch", ""))
         service = GitOperationService(root)
-        if action == "plan":
-            plan = service.plan(str(payload.get("operation", "")), payload)
-            return plan.model_dump(mode="json")
-        if action == "execute":
-            result = service.execute(str(payload.get("planId", "")), payload)
-            return result.model_dump(mode="json")
-        if action == "hunks":
-            return service.hunks(str(payload.get("path", "")), str(payload.get("area", "")))
+        service_result = self._service_action(service, action, payload)
+        if service_result is not None:
+            return service_result
         if action == "switch_preview":
             return self._preview(root, branch)
         if action == "switch_execute":
@@ -66,8 +61,25 @@ class GitActions:
             }
         raise CodePreflightError(
             "invalid_git_action",
-            "Git action must be plan, execute, hunks, switch_preview, or switch_execute",
+            "Git action must be plan, execute, hunks, stashes, switch_preview, or switch_execute",
         )
+
+    def _service_action(
+        self,
+        service: GitOperationService,
+        action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if action == "plan":
+            return service.plan(str(payload.get("operation", "")), payload).model_dump(mode="json")
+        if action == "execute":
+            return service.execute(str(payload.get("planId", "")), payload).model_dump(mode="json")
+        if action == "hunks":
+            return service.hunks(str(payload.get("path", "")), str(payload.get("area", "")))
+        if action == "stashes":
+            reference = payload.get("stash")
+            return service.stashes(str(reference) if reference is not None else None)
+        return None
 
     def _preview(self, root: Path, branch: str) -> dict[str, Any]:
         if not branch or branch.startswith("-"):

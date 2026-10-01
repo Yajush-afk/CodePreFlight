@@ -18,6 +18,7 @@ from .errors import CodePreflightError
 from .finding_ledger import FindingLedger
 from .git import GitRunner
 from .models import (
+    ConflictState,
     GitConfirmation,
     GitOperationPlan,
     GitOperationResult,
@@ -33,6 +34,8 @@ HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?P<contex
 
 FileAction = Literal["stage_files", "unstage_files", "discard_worktree"]
 HunkAction = Literal["stage_hunks", "unstage_hunks"]
+BranchAction = Literal["create_branch", "switch_branch", "rename_branch", "delete_branch"]
+StashAction = Literal["stash_create", "stash_apply", "stash_pop", "stash_drop"]
 
 
 class GitOperationService:
@@ -53,9 +56,13 @@ class GitOperationService:
             return self._plan_hunks(action, parameters)  # type: ignore[arg-type]
         if action == "commit":
             return self._plan_commit(parameters)
+        if action in {"create_branch", "switch_branch", "rename_branch", "delete_branch"}:
+            return self._plan_branch(action, parameters)  # type: ignore[arg-type]
+        if action in {"stash_create", "stash_apply", "stash_pop", "stash_drop"}:
+            return self._plan_stash(action, parameters)  # type: ignore[arg-type]
         raise CodePreflightError(
             "unsupported_git_operation",
-            "This release can plan stage, unstage, discard-worktree, hunk, and commit actions",
+            "Unsupported Git operation",
         )
 
     def execute(self, plan_id: str, payload: dict[str, Any]) -> GitOperationResult:
@@ -89,6 +96,48 @@ class GitOperationService:
             "binary": internal["binary"],
             "hunks": [self._public_hunk(item) for item in internal["hunks"]],
         }
+
+    def stashes(self, reference: str | None = None) -> dict[str, Any]:
+        if reference:
+            stash_ref, oid = self._stash_identity(reference)
+            return {
+                "reference": stash_ref,
+                "oid": oid,
+                "diff": GitRunner(self.root)
+                .run(
+                    "stash",
+                    "show",
+                    "--patch",
+                    "--binary",
+                    "--include-untracked",
+                    stash_ref,
+                    mutability="read_only",
+                )
+                .stdout,
+            }
+        output = (
+            GitRunner(self.root)
+            .run(
+                "stash",
+                "list",
+                "--format=%gd%x00%H%x00%gs%x00%ct",
+                mutability="read_only",
+            )
+            .stdout
+        )
+        items = []
+        for line in output.splitlines():
+            fields = line.split("\0")
+            if len(fields) == 4:
+                items.append(
+                    {
+                        "reference": fields[0],
+                        "oid": fields[1],
+                        "subject": fields[2],
+                        "timestamp": int(fields[3]),
+                    }
+                )
+        return {"items": items}
 
     def _plan_files(self, action: FileAction, parameters: dict[str, Any]) -> GitOperationPlan:
         paths = self._paths(parameters.get("paths"))
@@ -201,6 +250,222 @@ class GitOperationService:
             hook_involvement=True,
         )
 
+    def _plan_branch(self, action: BranchAction, parameters: dict[str, Any]) -> GitOperationPlan:
+        if action == "create_branch":
+            return self._plan_create_branch(parameters)
+        if action == "switch_branch":
+            return self._plan_switch_branch(parameters)
+        if action == "rename_branch":
+            return self._plan_rename_branch(parameters)
+        return self._plan_delete_branch(parameters)
+
+    def _plan_create_branch(self, parameters: dict[str, Any]) -> GitOperationPlan:
+        destination = self._branch_name(parameters.get("branch"))
+        self._require_missing_branch(destination)
+        start = str(parameters.get("startPoint") or "HEAD")
+        start_oid = self._commit_oid(start)
+        return self._save_plan(
+            action="create_branch",
+            command=self._command(["branch", destination, start_oid]),
+            paths=[],
+            hunks=[],
+            parameters={
+                "branch": destination,
+                "startPoint": start,
+                "startOid": start_oid,
+            },
+            patch=None,
+            risk=GitOperationRisk.LOW,
+            confirmation=GitConfirmation.EXPLICIT,
+            preview=f"Create local branch {destination} at {start_oid[:12]}",
+            effects=[f"Create refs/heads/{destination} without switching branches"],
+            limitations=[],
+            refs={f"refs/heads/{destination}": ""},
+            destination=destination,
+        )
+
+    def _plan_switch_branch(self, parameters: dict[str, Any]) -> GitOperationPlan:
+        destination = self._branch_name(parameters.get("branch"))
+        target_oid = self._local_branch_oid(destination)
+        snapshot = RepositoryInspector().inspect(self.root)
+        if not snapshot.branch:
+            raise CodePreflightError(
+                "branch_switch_detached_head",
+                "Return to a named local branch before switching through CodePreflight",
+                recoverable=True,
+            )
+        if snapshot.branch == destination:
+            raise CodePreflightError("branch_already_current", f"Already on {destination}")
+        self._require_no_active_operation(snapshot.conflicts)
+        collisions, preserved = self._switch_collisions(snapshot, target_oid)
+        if collisions:
+            raise CodePreflightError(
+                "branch_switch_unsafe",
+                "Branch switch would overwrite local paths",
+                recoverable=True,
+                details={"collisions": collisions, "preservedPaths": preserved},
+            )
+        return self._save_plan(
+            action="switch_branch",
+            command=self._command(["switch", "--no-guess", destination]),
+            paths=[],
+            hunks=[],
+            parameters={"branch": destination},
+            patch=None,
+            risk=GitOperationRisk.MEDIUM,
+            confirmation=GitConfirmation.EXPLICIT,
+            preview=(
+                f"Switch {snapshot.branch} -> {destination}\n"
+                f"Preserved local paths: {len(preserved)}"
+            ),
+            effects=[f"Make {destination} the current local branch"],
+            limitations=["Git may still refuse if repository state changes"],
+            refs={f"refs/heads/{destination}": target_oid},
+            source=snapshot.branch,
+            destination=destination,
+        )
+
+    def _plan_rename_branch(self, parameters: dict[str, Any]) -> GitOperationPlan:
+        snapshot = RepositoryInspector().inspect(self.root)
+        self._require_no_active_operation(snapshot.conflicts)
+        source = self._branch_name(parameters.get("source") or snapshot.branch)
+        destination = self._branch_name(parameters.get("destination"))
+        source_oid = self._local_branch_oid(source)
+        self._require_missing_branch(destination)
+        return self._save_plan(
+            action="rename_branch",
+            command=self._command(["branch", "-m", source, destination]),
+            paths=[],
+            hunks=[],
+            parameters={"source": source, "destination": destination},
+            patch=None,
+            risk=GitOperationRisk.MEDIUM,
+            confirmation=GitConfirmation.EXPLICIT,
+            preview=f"Rename local branch {source} -> {destination}",
+            effects=[f"Rename refs/heads/{source} to refs/heads/{destination}"],
+            limitations=["The remote branch is not renamed or deleted"],
+            refs={
+                f"refs/heads/{source}": source_oid,
+                f"refs/heads/{destination}": "",
+            },
+            source=source,
+            destination=destination,
+        )
+
+    def _plan_delete_branch(self, parameters: dict[str, Any]) -> GitOperationPlan:
+        snapshot = RepositoryInspector().inspect(self.root)
+        self._require_no_active_operation(snapshot.conflicts)
+        source = self._branch_name(parameters.get("branch"))
+        source_oid = self._local_branch_oid(source)
+        if snapshot.branch == source:
+            raise CodePreflightError(
+                "cannot_delete_current_branch", "Switch branches before deletion"
+            )
+        merged = (
+            GitRunner(self.root)
+            .run("merge-base", "--is-ancestor", source_oid, "HEAD", check=False)
+            .returncode
+            == 0
+        )
+        if not merged:
+            raise CodePreflightError(
+                "branch_not_merged",
+                "Safe branch deletion is limited to branches merged into the current HEAD",
+                recoverable=True,
+            )
+        return self._save_plan(
+            action="delete_branch",
+            command=self._command(["branch", "-d", source]),
+            paths=[],
+            hunks=[],
+            parameters={"branch": source},
+            patch=None,
+            risk=GitOperationRisk.MEDIUM,
+            confirmation=GitConfirmation.EXPLICIT,
+            preview=f"Delete merged local branch {source} at {source_oid[:12]}",
+            effects=[f"Delete local ref refs/heads/{source}"],
+            limitations=["The remote branch is not deleted"],
+            refs={f"refs/heads/{source}": source_oid},
+            source=source,
+        )
+
+    def _plan_stash(self, action: StashAction, parameters: dict[str, Any]) -> GitOperationPlan:
+        if action == "stash_create":
+            return self._plan_stash_create(parameters)
+        stash_ref, stash_oid = self._stash_identity(str(parameters.get("stash", "")))
+        reinstate = request_flag(parameters, "reinstateIndex")
+        args = ["stash", action.removeprefix("stash_")]
+        if action in {"stash_apply", "stash_pop"} and reinstate:
+            args.append("--index")
+        args.append(stash_ref)
+        risk = GitOperationRisk.IRREVERSIBLE if action == "stash_drop" else GitOperationRisk.MEDIUM
+        confirmation = GitConfirmation.TYPED if action == "stash_drop" else GitConfirmation.EXPLICIT
+        return self._save_plan(
+            action=action,
+            command=self._command(args),
+            paths=[],
+            hunks=[],
+            parameters={"stash": stash_ref, "reinstateIndex": reinstate},
+            patch=None,
+            risk=risk,
+            confirmation=confirmation,
+            preview=GitRunner(self.root)
+            .run(
+                "stash",
+                "show",
+                "--patch",
+                "--binary",
+                "--include-untracked",
+                stash_ref,
+                mutability="read_only",
+            )
+            .stdout,
+            effects=[self._stash_effect(action, stash_ref)],
+            limitations=self._stash_limitations(action),
+            refs={stash_ref: stash_oid},
+            source=stash_ref,
+        )
+
+    def _plan_stash_create(self, parameters: dict[str, Any]) -> GitOperationPlan:
+        paths = self._paths(parameters.get("paths"))
+        snapshot = RepositoryInspector().inspect(self.root)
+        self._require_no_active_operation(snapshot.conflicts)
+        changes = {item.path: item for item in snapshot.files if not item.ignored}
+        missing = [path for path in paths if path not in changes]
+        if missing:
+            raise CodePreflightError(
+                "git_paths_unchanged",
+                "Every selected stash path must have a current repository change",
+                details={"paths": missing},
+            )
+        message = self._stash_message(parameters.get("message"))
+        include_untracked = any(changes[path].untracked for path in paths)
+        args = ["stash", "push", "-m", message]
+        if include_untracked:
+            args.append("--include-untracked")
+        args.extend(["--", *paths])
+        preview = self._file_preview("stage_files", paths)
+        staged = GitRunner(self.root).run("diff", "--cached", "--binary", "--", *paths).stdout
+        if staged:
+            preview = f"{preview}\n{staged}"
+        return self._save_plan(
+            action="stash_create",
+            command=self._command(args),
+            paths=paths,
+            hunks=[],
+            parameters={
+                "paths": paths,
+                "message": message,
+                "includeUntracked": include_untracked,
+            },
+            patch=None,
+            risk=GitOperationRisk.MEDIUM,
+            confirmation=GitConfirmation.EXPLICIT,
+            preview=preview,
+            effects=["Create one stash and restore only the selected paths"],
+            limitations=["Ignored paths are never included"],
+        )
+
     def _save_plan(
         self,
         *,
@@ -216,8 +481,12 @@ class GitOperationService:
         effects: list[str],
         limitations: list[str],
         hook_involvement: bool = False,
+        refs: dict[str, str] | None = None,
+        source: str | None = None,
+        destination: str | None = None,
     ) -> GitOperationPlan:
-        state = self._state(paths)
+        bound_refs = refs or {}
+        state = self._state(paths, bound_refs)
         fingerprint = self._fingerprint(action, parameters, patch, state)
         plan_id = uuid4().hex[:24]
         expires = datetime.now(UTC) + PLAN_LIFETIME
@@ -233,6 +502,9 @@ class GitOperationService:
             worktree_fingerprint=state["worktree"],
             selected_paths=paths,
             selected_hunks=hunks,
+            refs=bound_refs,
+            source=source,
+            destination=destination,
             expected_effects=effects,
             hook_involvement=hook_involvement,
             recovery_limitations=limitations,
@@ -253,22 +525,10 @@ class GitOperationService:
     def _execute_stored(self, stored: dict[str, Any], plan: GitOperationPlan) -> GitOperationResult:
         parameters = self._dict(stored.get("parameters"), "parameters")
         git = GitRunner(self.root)
-        warning: str | None = None
-        if plan.action == "stage_files":
-            git.run("add", "--", *plan.selected_paths, mutability="mutating")
-        elif plan.action == "unstage_files":
-            self._unstage_files(git, plan.selected_paths)
-        elif plan.action == "discard_worktree":
-            git.run("restore", "--worktree", "--", *plan.selected_paths, mutability="mutating")
-            warning = self._mark_findings_changed(plan.selected_paths, "working_tree_discarded")
-        elif plan.action in {"stage_hunks", "unstage_hunks"}:
-            self._apply_hunks(git, plan.action, stored.get("patch"))
-        elif plan.action == "commit":
-            warning = self._commit(git, plan.selected_paths, parameters)
-        else:
-            raise CodePreflightError(
-                "unsupported_git_operation", f"Cannot execute action: {plan.action}"
-            )
+        outcome = self._run_stored_action(git, stored, plan, parameters)
+        if isinstance(outcome, GitOperationResult):
+            return outcome
+        warning = outcome
         try:
             snapshot = RepositoryInspector().inspect(self.root)
         except CodePreflightError as error:
@@ -284,6 +544,139 @@ class GitOperationService:
             message=message,
             exit_code=0,
             repository=snapshot,
+        )
+
+    def _run_stored_action(
+        self,
+        git: GitRunner,
+        stored: dict[str, Any],
+        plan: GitOperationPlan,
+        parameters: dict[str, Any],
+    ) -> str | GitOperationResult | None:
+        if plan.action in {
+            "stage_files",
+            "unstage_files",
+            "discard_worktree",
+            "stage_hunks",
+            "unstage_hunks",
+            "commit",
+        }:
+            return self._run_change_action(git, stored, plan, parameters)
+        if plan.action in {
+            "create_branch",
+            "switch_branch",
+            "rename_branch",
+            "delete_branch",
+        }:
+            self._run_branch_action(git, plan.action, parameters)
+            return None
+        if plan.action in {"stash_create", "stash_apply", "stash_pop", "stash_drop"}:
+            return self._run_stash_action(git, plan, parameters)
+        raise CodePreflightError(
+            "unsupported_git_operation", f"Cannot execute action: {plan.action}"
+        )
+
+    def _run_change_action(
+        self,
+        git: GitRunner,
+        stored: dict[str, Any],
+        plan: GitOperationPlan,
+        parameters: dict[str, Any],
+    ) -> str | None:
+        if plan.action == "stage_files":
+            git.run("add", "--", *plan.selected_paths, mutability="mutating")
+        elif plan.action == "unstage_files":
+            self._unstage_files(git, plan.selected_paths)
+        elif plan.action == "discard_worktree":
+            git.run("restore", "--worktree", "--", *plan.selected_paths, mutability="mutating")
+            return self._mark_findings_changed(plan.selected_paths, "working_tree_discarded")
+        elif plan.action in {"stage_hunks", "unstage_hunks"}:
+            self._apply_hunks(git, plan.action, stored.get("patch"))
+        else:
+            return self._commit(git, plan.selected_paths, parameters)
+        return None
+
+    def _run_branch_action(self, git: GitRunner, action: str, parameters: dict[str, Any]) -> None:
+        if action == "create_branch":
+            git.run(
+                "branch",
+                str(parameters["branch"]),
+                str(parameters["startOid"]),
+                mutability="mutating",
+            )
+        elif action == "switch_branch":
+            git.run(
+                "switch",
+                "--no-guess",
+                str(parameters["branch"]),
+                mutability="mutating",
+            )
+        elif action == "rename_branch":
+            git.run(
+                "branch",
+                "-m",
+                str(parameters["source"]),
+                str(parameters["destination"]),
+                mutability="mutating",
+            )
+        else:
+            git.run("branch", "-d", str(parameters["branch"]), mutability="mutating")
+
+    def _run_stash_action(
+        self, git: GitRunner, plan: GitOperationPlan, parameters: dict[str, Any]
+    ) -> GitOperationResult | None:
+        if plan.action == "stash_create":
+            self._create_stash(git, parameters)
+            return None
+        if plan.action in {"stash_apply", "stash_pop"}:
+            return self._restore_stash(git, plan, parameters)
+        if plan.action == "stash_drop":
+            git.run("stash", "drop", str(parameters["stash"]), mutability="mutating")
+        return None
+
+    def _create_stash(self, git: GitRunner, parameters: dict[str, Any]) -> None:
+        paths = self._string_list(parameters.get("paths"), "paths")
+        args = ["stash", "push", "-m", str(parameters["message"])]
+        if parameters.get("includeUntracked") is True:
+            args.append("--include-untracked")
+        args.extend(["--", *paths])
+        git.run(*args, mutability="mutating", timeout=120)
+
+    def _restore_stash(
+        self,
+        git: GitRunner,
+        plan: GitOperationPlan,
+        parameters: dict[str, Any],
+    ) -> GitOperationResult | None:
+        command = plan.action.removeprefix("stash_")
+        args = ["stash", command]
+        if parameters.get("reinstateIndex") is True:
+            args.append("--index")
+        args.append(str(parameters["stash"]))
+        result = git.run(*args, check=False, mutability="mutating", timeout=120)
+        if result.returncode == 0:
+            return None
+        snapshot = RepositoryInspector().inspect(self.root)
+        conflicted = bool(snapshot.conflicts)
+        conflict = (
+            ConflictState(
+                operation=plan.action,
+                files=snapshot.conflicts,
+                can_continue=False,
+                can_abort=False,
+            )
+            if conflicted
+            else None
+        )
+        detail = result.stderr.strip() or result.stdout.strip() or "Git refused the stash action"
+        return GitOperationResult(
+            plan_id=plan.id,
+            action=plan.action,
+            status="conflicted" if conflicted else "failed",
+            message=detail[-2_000:],
+            exit_code=result.returncode,
+            repository=snapshot,
+            conflict=conflict,
         )
 
     def _unstage_files(self, git: GitRunner, paths: list[str]) -> None:
@@ -331,7 +724,7 @@ class GitOperationService:
                 recoverable=True,
             )
         expected = self._dict(stored.get("state"), "state")
-        current = self._state(plan.selected_paths)
+        current = self._state(plan.selected_paths, plan.refs)
         if expected != current:
             raise CodePreflightError(
                 "repository_state_changed",
@@ -343,7 +736,10 @@ class GitOperationService:
     def _validate_stored_plan(
         self, plan_id: str, stored: dict[str, Any], plan: GitOperationPlan
     ) -> None:
-        if plan.id != plan_id or self._paths(plan.selected_paths) != plan.selected_paths:
+        paths_valid = (
+            not plan.selected_paths or self._paths(plan.selected_paths) == plan.selected_paths
+        )
+        if plan.id != plan_id or not paths_valid:
             raise CodePreflightError("invalid_git_plan", "Stored Git preview identity is invalid")
         state = self._dict(stored.get("state"), "state")
         parameters = self._dict(stored.get("parameters"), "parameters")
@@ -357,7 +753,10 @@ class GitOperationService:
     def _require_confirmation(self, plan: GitOperationPlan, payload: dict[str, Any]) -> None:
         if plan.confirmation != GitConfirmation.TYPED:
             return
-        expected = "DISCARD" if plan.action == "discard_worktree" else plan.action.upper()
+        expected = {
+            "discard_worktree": "DISCARD",
+            "stash_drop": "DROP",
+        }.get(plan.action, plan.action.upper())
         if payload.get("confirmation") != expected:
             raise CodePreflightError(
                 "git_typed_confirmation_required",
@@ -392,6 +791,112 @@ class GitOperationService:
                 f"The selected paths cannot be used for {action.replace('_', ' ')}",
                 details={"paths": invalid},
             )
+
+    def _branch_name(self, value: object) -> str:
+        if not isinstance(value, str) or not value or value.startswith("-"):
+            raise CodePreflightError("invalid_branch", "Enter a valid local branch name")
+        result = GitRunner(self.root).run("check-ref-format", "--branch", value, check=False)
+        if result.returncode != 0:
+            raise CodePreflightError("invalid_branch", f"Invalid local branch name: {value}")
+        return value
+
+    def _local_branch_oid(self, branch: str) -> str:
+        ref = f"refs/heads/{branch}"
+        result = GitRunner(self.root).run("show-ref", "--verify", "--hash", ref, check=False)
+        if result.returncode != 0:
+            raise CodePreflightError(
+                "local_branch_not_found", f"Local branch `{branch}` does not exist"
+            )
+        return result.stdout.strip()
+
+    def _require_missing_branch(self, branch: str) -> None:
+        exists = GitRunner(self.root).run(
+            "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False
+        )
+        if exists.returncode == 0:
+            raise CodePreflightError("branch_already_exists", f"Local branch `{branch}` exists")
+
+    def _commit_oid(self, revision: str) -> str:
+        if not revision or revision.startswith("-") or "\0" in revision:
+            raise CodePreflightError("invalid_revision", "Select a valid local start point")
+        result = GitRunner(self.root).run(
+            "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}", check=False
+        )
+        if result.returncode != 0:
+            raise CodePreflightError(
+                "revision_not_found", f"Local start point `{revision}` is not a commit"
+            )
+        return result.stdout.strip()
+
+    def _require_no_active_operation(self, conflicts: list[str]) -> None:
+        git = GitRunner(self.root)
+        active = self._active_operation(git)
+        if active or conflicts:
+            raise CodePreflightError(
+                "git_operation_active",
+                f"Resolve the active {active or 'conflict'} state before this Git action",
+                recoverable=True,
+                details={"operation": active, "conflicts": conflicts},
+            )
+
+    def _active_operation(self, git: GitRunner) -> str | None:
+        git_dir = Path(git.run("rev-parse", "--absolute-git-dir").stdout.strip())
+        for name, markers in (
+            ("merge", ("MERGE_HEAD",)),
+            ("rebase", ("rebase-merge", "rebase-apply")),
+            ("cherry-pick", ("CHERRY_PICK_HEAD",)),
+            ("revert", ("REVERT_HEAD",)),
+        ):
+            if any((git_dir / marker).exists() for marker in markers):
+                return name
+        return None
+
+    def _switch_collisions(self, snapshot: Any, target_oid: str) -> tuple[list[str], list[str]]:
+        git = GitRunner(self.root)
+        differing = set(
+            self._nul_paths(git.run("diff", "--name-only", "-z", "HEAD", target_oid).stdout)
+        )
+        dirty = {item.path for item in snapshot.files if not item.untracked and not item.ignored}
+        untracked = {item.path for item in snapshot.files if item.untracked}
+        target_paths = set(
+            self._nul_paths(git.run("ls-tree", "-r", "-z", "--name-only", target_oid).stdout)
+        )
+        collisions = sorted((dirty & differing) | (untracked & target_paths))
+        preserved = sorted((dirty | untracked) - set(collisions))
+        return collisions, preserved
+
+    def _stash_identity(self, value: str) -> tuple[str, str]:
+        if not re.fullmatch(r"stash@\{\d+\}", value):
+            raise CodePreflightError("invalid_stash", "Select a stash reference such as stash@{0}")
+        result = GitRunner(self.root).run("rev-parse", "--verify", value, check=False)
+        if result.returncode != 0:
+            raise CodePreflightError("stash_not_found", f"Unknown stash: {value}")
+        return value, result.stdout.strip()
+
+    def _stash_message(self, value: object) -> str:
+        message = "CodePreflight selected changes" if value is None else str(value).strip()
+        if not message or "\0" in message or "\n" in message or len(message) > 200:
+            raise CodePreflightError(
+                "invalid_stash_message", "Stash message must be one line under 200 characters"
+            )
+        return message
+
+    def _stash_effect(self, action: StashAction, stash_ref: str) -> str:
+        return {
+            "stash_apply": f"Apply {stash_ref} while keeping it in the stash list",
+            "stash_pop": f"Apply {stash_ref} and drop it only if Git succeeds",
+            "stash_drop": f"Permanently remove {stash_ref} from the stash list",
+            "stash_create": "Create a stash",
+        }[action]
+
+    def _stash_limitations(self, action: StashAction) -> list[str]:
+        if action == "stash_drop":
+            return ["Dropped stash entries may be difficult or impossible to recover"]
+        if action in {"stash_apply", "stash_pop"}:
+            return [
+                "Applying a stash may create conflicts; Preflight never resolves them automatically"
+            ]
+        return []
 
     def _file_action_metadata(
         self, action: FileAction, paths: list[str]
@@ -476,18 +981,23 @@ class GitOperationService:
             "diff": hunk["patch"]
         }
 
-    def _state(self, paths: list[str]) -> dict[str, str]:
+    def _state(self, paths: list[str], refs: dict[str, str] | None = None) -> dict[str, str]:
         git = GitRunner(self.root)
         head = git.run("rev-parse", "--verify", "HEAD", check=False).stdout.strip()
         index = git.run("ls-files", "-s", "-z").stdout
         status = git.run("status", "--porcelain=v2", "-z", "--untracked-files=all").stdout
         worktree = git.run("diff", "--binary", "--no-ext-diff").stdout
         selected = {path: self._path_digest(path) for path in paths}
+        current_refs = {
+            ref: git.run("rev-parse", "--verify", ref, check=False).stdout.strip()
+            for ref in sorted(refs or {})
+        }
         return {
             "head": head,
             "index": self._digest(index),
             "worktree": self._digest(worktree + "\0" + status),
             "selected": self._digest(json.dumps(selected, sort_keys=True)),
+            "refs": self._digest(json.dumps(current_refs, sort_keys=True)),
         }
 
     def _path_digest(self, relative: str) -> str:
