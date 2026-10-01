@@ -1,6 +1,7 @@
 import { useInput, type Key } from "ink";
 import type { Dispatch, SetStateAction } from "react";
-import type { SessionController, SessionState } from "./session-controller.js";
+import type { SessionController } from "./session-controller.js";
+import type { SessionState } from "./session-state.js";
 import type { Suggestion } from "./command-registry.js";
 export { sanitizeComposerInput } from "./composer-input.js";
 

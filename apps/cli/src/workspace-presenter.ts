@@ -1,8 +1,8 @@
 import type {
   SessionHeader,
-  TranscriptEntry,
   SessionOverlayItem,
-} from "./session-controller.js";
+  TranscriptEntry,
+} from "./session-state.js";
 import { sanitizeTerminalText } from "./terminal-text.js";
 
 export interface TranscriptLine {
