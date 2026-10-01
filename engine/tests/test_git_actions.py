@@ -25,6 +25,7 @@ def test_safe_switch_previews_and_executes_existing_local_branch(git_repository:
             "branch": "feature",
             "approved": True,
             "expectedHead": preview["expectedHead"],
+            "targetOid": preview["targetOid"],
         },
     )
 
@@ -59,3 +60,41 @@ def test_switch_requires_approval_and_rejects_missing_branch(git_repository: Pat
             {"action": "switch_execute", "branch": "feature", "approved": False},
         )
     assert approval.value.code == "git_action_approval_required"
+
+    with pytest.raises(CodePreflightError) as invalid:
+        actions.run(
+            git_repository,
+            {"action": "switch_execute", "branch": "feature", "approved": "false"},
+        )
+    assert invalid.value.code == "invalid_request_flag"
+
+
+def test_switch_rejects_destination_branch_changed_after_preview(git_repository: Path) -> None:
+    git(git_repository, "branch", "feature")
+    actions = GitActions()
+    preview = actions.run(git_repository, {"action": "switch_preview", "branch": "feature"})
+    tree = git(git_repository, "rev-parse", "HEAD^{tree}").strip()
+    replacement = git(
+        git_repository,
+        "commit-tree",
+        tree,
+        "-p",
+        preview["targetOid"],
+        "-m",
+        "Move destination",
+    ).strip()
+    git(git_repository, "branch", "-f", "feature", replacement)
+
+    with pytest.raises(CodePreflightError) as error:
+        actions.run(
+            git_repository,
+            {
+                "action": "switch_execute",
+                "branch": "feature",
+                "approved": True,
+                "expectedHead": preview["expectedHead"],
+                "targetOid": preview["targetOid"],
+            },
+        )
+
+    assert error.value.code == "repository_state_changed"

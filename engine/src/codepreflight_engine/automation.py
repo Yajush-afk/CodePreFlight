@@ -14,6 +14,7 @@ from .errors import CodePreflightError
 from .git import GitRunner
 from .providers import discover_providers
 from .repository import RepositoryInspector
+from .state_files import atomic_write_json, reject_symlink_path, safe_read_text
 
 ReviewMode = Literal["manual", "auto", "auto_plus"]
 JobStatus = Literal[
@@ -262,8 +263,13 @@ class AutomationManager:
         self._validate_job_id(job_id)
         lock = self.jobs_dir / f"{job_id}.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
+        reject_symlink_path(lock.parent)
         try:
-            descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            descriptor = os.open(
+                lock,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
         except FileExistsError:
             return False
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -302,16 +308,13 @@ class AutomationManager:
             raise CodePreflightError("invalid_automation_job", "Invalid automation job identifier")
 
     def _atomic_json(self, path: Path, value: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        temporary.replace(path)
+        atomic_write_json(path, value)
 
     def _read_json(self, path: Path) -> dict[str, Any] | None:
         if not path.exists():
             return None
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(safe_read_text(path))
         except (OSError, json.JSONDecodeError) as error:
             raise CodePreflightError(
                 "automation_state_invalid", f"Cannot read automation state: {path.name}"

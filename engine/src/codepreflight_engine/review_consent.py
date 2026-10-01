@@ -6,6 +6,7 @@ from typing import Any
 from .errors import CodePreflightError
 from .models import ContextPackage, ProviderDescriptor
 from .readiness import consent_fingerprint, provider_destination, remote_approval_matches
+from .request_values import request_flag
 
 
 def require_review_consent(
@@ -30,7 +31,7 @@ def require_review_consent(
             },
         },
     )
-    hook_approval = bool(payload.get("hook")) and bool(
+    hook_approval = request_flag(payload, "hook") and bool(
         config.get("hooks", {}).get("remote_provider_approved", False)
     )
     if provider.sends_code_remotely and not (

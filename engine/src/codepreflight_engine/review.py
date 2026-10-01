@@ -35,6 +35,7 @@ from .models import (
     VerificationState,
 )
 from .readiness import ProviderHealth, require_review_ready
+from .request_values import request_flag
 from .review_consent import require_review_consent
 from .review_invocation import ReviewInvocation
 from .trust import is_trusted
@@ -92,7 +93,7 @@ class ReviewOrchestrator:
         )
         adapter = ProviderRegistry(config).adapter(selected_id)
         provider = adapter.descriptor
-        require_review_ready(root, provider, config, evidence=bool(payload.get("automation")))
+        require_review_ready(root, provider, config, evidence=request_flag(payload, "automation"))
         if config.get("checks") and not is_trusted(root):
             raise CodePreflightError(
                 "repository_not_trusted",
@@ -128,7 +129,9 @@ class ReviewOrchestrator:
             scope.working.fingerprint if scope.working else None,
         )
         cache = ReviewCache(root)
-        if bool(config.get("cache", {}).get("enabled", True)) and not bool(payload.get("noCache")):
+        if bool(config.get("cache", {}).get("enabled", True)) and not request_flag(
+            payload, "noCache"
+        ):
             cached = cache.get(fingerprint, context)
             if cached:
                 self._require_current_working_snapshot(root, scope)

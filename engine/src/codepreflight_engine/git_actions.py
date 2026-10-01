@@ -6,6 +6,7 @@ from typing import Any
 from .errors import CodePreflightError
 from .git import GitRunner
 from .repository import RepositoryInspector
+from .request_values import request_flag
 
 
 class GitActions:
@@ -18,7 +19,7 @@ class GitActions:
         if action == "switch_preview":
             return self._preview(root, branch)
         if action == "switch_execute":
-            if not bool(payload.get("approved")):
+            if not request_flag(payload, "approved"):
                 raise CodePreflightError(
                     "git_action_approval_required", "Branch switching requires explicit approval"
                 )
@@ -30,6 +31,14 @@ class GitActions:
                     "Repository HEAD changed after the branch-switch preview; preview it again",
                     recoverable=True,
                 )
+            expected_target = str(payload.get("targetOid", ""))
+            current_target = GitRunner(root).run("rev-parse", f"refs/heads/{branch}").stdout.strip()
+            if not expected_target or current_target != expected_target:
+                raise CodePreflightError(
+                    "repository_state_changed",
+                    "The destination branch changed after preview; preview it again",
+                    recoverable=True,
+                )
             preview = self._preview(root, branch)
             if not preview["allowed"]:
                 raise CodePreflightError(
@@ -38,7 +47,7 @@ class GitActions:
                     recoverable=True,
                     details=preview,
                 )
-            GitRunner(root).run("switch", "--no-guess", branch)
+            GitRunner(root).run("switch", "--no-guess", branch, mutability="mutating")
             snapshot = RepositoryInspector().inspect(root)
             return {
                 "branch": snapshot.branch,
@@ -79,12 +88,18 @@ class GitActions:
         expected_head = git.run("rev-parse", "HEAD").stdout.strip()
         target_oid = git.run("rev-parse", f"refs/heads/{branch}").stdout.strip()
         differing = set(
-            filter(None, git.run("diff", "--name-only", "HEAD", target_oid).stdout.splitlines())
+            filter(
+                None,
+                git.run("diff", "--name-only", "-z", "HEAD", target_oid).stdout.split("\0"),
+            )
         )
         dirty = {item.path for item in snapshot.files if not item.untracked and not item.ignored}
         untracked = {item.path for item in snapshot.files if item.untracked}
         target_paths = set(
-            filter(None, git.run("ls-tree", "-r", "--name-only", target_oid).stdout.splitlines())
+            filter(
+                None,
+                git.run("ls-tree", "-r", "-z", "--name-only", target_oid).stdout.split("\0"),
+            )
         )
         collisions = sorted((dirty & differing) | (untracked & target_paths))
         preserved = sorted((dirty | untracked) - set(collisions))

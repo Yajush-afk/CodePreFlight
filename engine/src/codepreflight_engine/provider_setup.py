@@ -18,6 +18,7 @@ from .config import (
     repository_config_path,
 )
 from .errors import CodePreflightError
+from .state_files import atomic_write_text
 
 PROVIDER_IDS = {"ollama", "codex", "opencode", "claude", "openai-compatible"}
 
@@ -69,10 +70,7 @@ def configure_provider(
         )
     )
     if write:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.codepreflight")
-        temporary.write_text(rendered, encoding="utf-8")
-        temporary.replace(path)
+        atomic_write_text(path, rendered, mode=0o644 if scope == "team" else 0o600)
     return {
         "provider": provider_id,
         "model": model,

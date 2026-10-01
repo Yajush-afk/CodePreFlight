@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import subprocess
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import BinaryIO
 
-from .activity import operation
+from .activity import operation, submit_with_activity
 from .models import CheckDefinition, CheckResult, CheckStatus
+from .processes import run_bounded_process
 
 MAX_OUTPUT = 12000
 
@@ -23,7 +22,10 @@ class CheckRunner:
     ) -> list[CheckResult]:
         workers = max(1, min(concurrency, len(definitions) or 1))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="preflight-check") as pool:
-            return list(pool.map(lambda definition: self._run_one(root, definition), definitions))
+            futures = [
+                submit_with_activity(pool, self._run_one, root, item) for item in definitions
+            ]
+            return [future.result() for future in futures]
 
     def _run_one(self, root: Path, definition: CheckDefinition) -> CheckResult:
         with operation(
@@ -48,33 +50,32 @@ class CheckRunner:
             )
         started = time.monotonic()
         try:
-            with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-                process = subprocess.Popen(
-                    definition.command,
-                    cwd=root,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                )
-                try:
-                    exit_code = process.wait(timeout=definition.timeout_seconds)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                    return CheckResult(
-                        name=definition.name,
-                        command=definition.command,
-                        status=CheckStatus.TIMED_OUT,
-                        duration_ms=int((time.monotonic() - started) * 1000),
-                        output=self._combined_tail(stdout_file, stderr_file),
-                    )
-                return CheckResult(
-                    name=definition.name,
-                    command=definition.command,
-                    status=CheckStatus.PASSED if exit_code == 0 else CheckStatus.FAILED,
-                    exit_code=exit_code,
-                    duration_ms=int((time.monotonic() - started) * 1000),
-                    output=self._combined_tail(stdout_file, stderr_file),
-                )
+            result = run_bounded_process(
+                definition.command,
+                cwd=root,
+                timeout=definition.timeout_seconds,
+                max_output_bytes=MAX_OUTPUT,
+                capture_tail=True,
+            )
+            output = (result.stdout + result.stderr)[-MAX_OUTPUT:]
+            if result.truncated:
+                output = "[earlier output truncated]\n" + output
+            return CheckResult(
+                name=definition.name,
+                command=definition.command,
+                status=CheckStatus.PASSED if result.returncode == 0 else CheckStatus.FAILED,
+                exit_code=result.returncode,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                output=output,
+            )
+        except subprocess.TimeoutExpired:
+            return CheckResult(
+                name=definition.name,
+                command=definition.command,
+                status=CheckStatus.TIMED_OUT,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                output="Check timed out; Preflight terminated its process group.",
+            )
         except OSError as error:
             return CheckResult(
                 name=definition.name,
@@ -83,11 +84,3 @@ class CheckRunner:
                 duration_ms=int((time.monotonic() - started) * 1000),
                 output=str(error),
             )
-
-    def _combined_tail(self, stdout: BinaryIO, stderr: BinaryIO) -> str:
-        return (self._tail(stdout) + self._tail(stderr))[-MAX_OUTPUT:]
-
-    def _tail(self, stream: BinaryIO) -> str:
-        size = stream.tell()
-        stream.seek(max(0, size - MAX_OUTPUT))
-        return stream.read(MAX_OUTPUT).decode("utf-8", errors="replace")

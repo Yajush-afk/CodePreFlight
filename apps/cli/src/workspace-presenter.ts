@@ -3,6 +3,7 @@ import type {
   TranscriptEntry,
   SessionOverlayItem,
 } from "./session-controller.js";
+import { sanitizeTerminalText } from "./terminal-text.js";
 
 export interface TranscriptLine {
   text: string;
@@ -35,19 +36,21 @@ export class WorkspacePresenter {
     height: number,
     offset: number,
   ): string {
-    const lines = text.split("\n").flatMap((line) => {
-      const characters = Array.from(line);
-      const rows: string[] = [];
-      for (
-        let index = 0;
-        index < characters.length;
-        index += Math.max(10, width)
-      )
-        rows.push(
-          characters.slice(index, index + Math.max(10, width)).join(""),
-        );
-      return rows.length ? rows : [""];
-    });
+    const lines = sanitizeTerminalText(text)
+      .split("\n")
+      .flatMap((line) => {
+        const characters = Array.from(line);
+        const rows: string[] = [];
+        for (
+          let index = 0;
+          index < characters.length;
+          index += Math.max(10, width)
+        )
+          rows.push(
+            characters.slice(index, index + Math.max(10, width)).join(""),
+          );
+        return rows.length ? rows : [""];
+      });
     const start = Math.min(offset, Math.max(0, lines.length - height));
     return lines.slice(start, start + height).join("\n");
   }
@@ -63,7 +66,7 @@ export class WorkspacePresenter {
     return items.map((item) => presenters[action](item));
   }
   private fileItem(item: Record<string, unknown>): SessionOverlayItem {
-    const path = String(item.path ?? "");
+    const path = sanitizeTerminalText(String(item.path ?? ""));
     return {
       label: `${String(item.status ?? "clean").padEnd(16)} ${path}`,
       value: path,
@@ -71,9 +74,9 @@ export class WorkspacePresenter {
     };
   }
   private branchItem(item: Record<string, unknown>): SessionOverlayItem {
-    const branch = String(item.name ?? "");
+    const branch = sanitizeTerminalText(String(item.name ?? ""));
     return {
-      label: `${item.current ? "●" : "○"} ${branch} · ${String(item.subject ?? "")}`,
+      label: `${item.current ? "●" : "○"} ${branch} · ${sanitizeTerminalText(String(item.subject ?? ""))}`,
       value: branch,
       action: { kind: item.current ? "close" : "branch", value: branch },
     };
@@ -81,7 +84,7 @@ export class WorkspacePresenter {
   private commitItem(item: Record<string, unknown>): SessionOverlayItem {
     const revision = String(item.oid ?? "");
     return {
-      label: `${item.merge ? "merge " : ""}${String(item.shortOid ?? "")} · ${String(item.subject ?? "")}`,
+      label: `${item.merge ? "merge " : ""}${sanitizeTerminalText(String(item.shortOid ?? ""))} · ${sanitizeTerminalText(String(item.subject ?? ""))}`,
       value: revision,
       action: { kind: "commit", value: revision },
     };
@@ -96,18 +99,25 @@ export class WorkspacePresenter {
       const prefix =
         entry.kind === "user" ? "You › " : entry.kind === "error" ? "× " : "";
       let fenced = false;
-      const body = entry.body.split("\n").flatMap((line) => {
-        if (line.trim().startsWith("```")) {
-          fenced = !fenced;
-          return [];
-        }
-        return [
-          { text: !entry.title ? `${prefix}${line}` : line, code: fenced },
-        ];
-      });
+      const body = sanitizeTerminalText(entry.body)
+        .split("\n")
+        .flatMap((line) => {
+          if (line.trim().startsWith("```")) {
+            fenced = !fenced;
+            return [];
+          }
+          return [
+            { text: !entry.title ? `${prefix}${line}` : line, code: fenced },
+          ];
+        });
       return [
         ...(entry.title
-          ? [{ text: `${prefix}${entry.title}`, code: false }]
+          ? [
+              {
+                text: `${prefix}${sanitizeTerminalText(entry.title)}`,
+                code: false,
+              },
+            ]
           : []),
         ...body,
         { text: "", code: false },

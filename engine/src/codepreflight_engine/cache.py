@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from .git import GitRunner
 from .models import ContextPackage, ReviewResult
+from .state_files import atomic_write_text, safe_read_text
 
 
 class ReviewCache:
@@ -20,7 +21,7 @@ class ReviewCache:
         if not path.exists():
             return None
         try:
-            value = ReviewResult.model_validate_json(path.read_text(encoding="utf-8"))
+            value = ReviewResult.model_validate_json(safe_read_text(path))
         except (OSError, ValidationError, ValueError):
             path.unlink(missing_ok=True)
             return None
@@ -31,9 +32,7 @@ class ReviewCache:
         safe_context = review.context.model_copy(update={"content": ""})
         safe_review = review.model_copy(update={"context": safe_context, "cache_hit": False})
         path = self.directory / f"{review.fingerprint}.json"
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(safe_review.model_dump_json(indent=2), encoding="utf-8")
-        temporary.replace(path)
+        atomic_write_text(path, safe_review.model_dump_json(indent=2))
 
     def status(self) -> dict[str, Any]:
         files = list(self.directory.glob("*.json")) if self.directory.exists() else []

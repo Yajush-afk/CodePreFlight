@@ -1,6 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
+from codepreflight_engine.errors import CodePreflightError
 from codepreflight_engine.models import ProviderDescriptor, ProviderKind
 from codepreflight_engine.readiness import (
     ProviderHealth,
@@ -88,3 +91,7 @@ def test_session_consent_is_bound_to_provider_settings() -> None:
     assert remote_approval_matches(
         provider, {}, {"remoteApproved": True}
     )  # direct command approval
+
+    with pytest.raises(CodePreflightError) as error:
+        remote_approval_matches(provider, {}, {"remoteApproved": "false"})
+    assert error.value.code == "invalid_request_flag"
