@@ -2,6 +2,8 @@ import pytest
 from pydantic import ValidationError
 
 from codepreflight_engine.models import (
+    ConflictFileDetail,
+    ConflictInspection,
     ConflictState,
     FindingDraft,
     GitConfirmation,
@@ -29,6 +31,22 @@ def test_protocol_v4_contract_vocabularies() -> None:
     )
     assert plan.selected_paths == ["feature.py"]
     assert conflict.can_abort is True
+
+    inspection = ConflictInspection(
+        operation="merge",
+        files=["feature.py"],
+        details=[
+            ConflictFileDetail(
+                path="feature.py",
+                base="old\n",
+                ours="ours\n",
+                theirs="theirs\n",
+                working="conflict\n",
+            )
+        ],
+        can_abort=True,
+    )
+    assert inspection.details[0].theirs == "theirs\n"
 
 
 def test_provider_contract_rejects_legacy_severity() -> None:

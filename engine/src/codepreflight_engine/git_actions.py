@@ -61,7 +61,8 @@ class GitActions:
             }
         raise CodePreflightError(
             "invalid_git_action",
-            "Git action must be plan, execute, hunks, stashes, switch_preview, or switch_execute",
+            "Git action must be plan, execute, hunks, stashes, conflicts, "
+            "switch_preview, or switch_execute",
         )
 
     def _service_action(
@@ -79,6 +80,9 @@ class GitActions:
         if action == "stashes":
             reference = payload.get("stash")
             return service.stashes(str(reference) if reference is not None else None)
+        if action == "conflicts":
+            path = payload.get("path")
+            return service.conflicts(str(path) if path is not None else None)
         return None
 
     def _preview(self, root: Path, branch: str) -> dict[str, Any]:

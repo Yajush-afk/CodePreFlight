@@ -342,6 +342,28 @@ class ConflictState(StrictModel):
     mergetool_available: bool = False
 
 
+class ConflictFileDetail(StrictModel):
+    path: str
+    binary: bool = False
+    base: str | None = None
+    ours: str | None = None
+    theirs: str | None = None
+    working: str | None = None
+    truncated: bool = False
+
+
+class ConflictInspection(StrictModel):
+    operation: str | None = None
+    files: list[str] = Field(default_factory=list)
+    details: list[ConflictFileDetail] = Field(default_factory=list)
+    can_continue: bool = False
+    can_abort: bool = False
+    editor_available: bool = False
+    editor_name: str | None = None
+    mergetool_available: bool = False
+    mergetool_name: str | None = None
+
+
 class GitOperationResult(StrictModel):
     plan_id: str
     action: str
@@ -350,6 +372,8 @@ class GitOperationResult(StrictModel):
     exit_code: int | None = None
     repository: RepositorySnapshot | None = None
     conflict: ConflictState | None = None
+    requires_terminal_handoff: bool = False
+    handoff_command: list[str] | None = None
 
 
 class WorkspaceViewData(StrictModel):

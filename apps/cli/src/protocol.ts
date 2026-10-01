@@ -134,6 +134,28 @@ export interface ConflictStateContract {
   mergetool_available?: boolean;
 }
 
+export interface ConflictFileDetailContract {
+  path: string;
+  binary?: boolean;
+  base?: string | null;
+  ours?: string | null;
+  theirs?: string | null;
+  working?: string | null;
+  truncated?: boolean;
+}
+
+export interface ConflictInspectionContract {
+  operation?: string | null;
+  files: string[];
+  details: ConflictFileDetailContract[];
+  can_continue: boolean;
+  can_abort: boolean;
+  editor_available: boolean;
+  editor_name?: string | null;
+  mergetool_available: boolean;
+  mergetool_name?: string | null;
+}
+
 export interface GitOperationResultContract {
   plan_id: string;
   action: string;
@@ -142,6 +164,8 @@ export interface GitOperationResultContract {
   exit_code?: number;
   repository?: RepositoryViewContract;
   conflict?: ConflictStateContract;
+  requires_terminal_handoff?: boolean;
+  handoff_command?: string[] | null;
 }
 
 export interface FileChangeContract {

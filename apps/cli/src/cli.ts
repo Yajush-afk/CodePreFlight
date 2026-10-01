@@ -18,6 +18,7 @@ import {
   printValue,
 } from "./format.js";
 import type { EngineEvent } from "./protocol.js";
+import { parseGitTerminalHandoff } from "./git-handoff.js";
 import {
   loginProvider,
   ollamaPullPlan,
@@ -119,6 +120,41 @@ async function requestGitAction(
     process.exitCode = 2;
     return undefined;
   }
+}
+
+async function runGitHandoff(value: unknown, json: boolean): Promise<void> {
+  let handoff;
+  try {
+    handoff = parseGitTerminalHandoff(value);
+  } catch (error) {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 2;
+    return;
+  }
+  if (!handoff) return;
+  const [executable, ...args] = handoff.command;
+  const exitCode = await new Promise<number>((resolveExit) => {
+    const child = spawn(executable, args, {
+      cwd: resolve(process.cwd()),
+      env: process.env,
+      shell: false,
+      stdio: "inherit",
+    });
+    child.once("error", () => resolveExit(127));
+    child.once("exit", (code) => resolveExit(code ?? 1));
+  });
+  if (exitCode !== 0) {
+    process.stderr.write(`Approved tool exited with status ${exitCode}.\n`);
+    process.exitCode = exitCode;
+  }
+  const inspection = await client.request(
+    "git_action",
+    resolve(process.cwd()),
+    { action: "conflicts" },
+  );
+  printValue(inspection, json);
 }
 
 program
@@ -692,12 +728,70 @@ gitControls
   .command("clean <paths...>")
   .description("preview removal of selected untracked or ignored files")
   .option("--json", "print machine-readable JSON")
-  .action(async (paths: string[], options: { json?: boolean }) => {
+  .action(async (paths: string[] = [], options: { json?: boolean }) => {
     await requestGitAction(
       { action: "plan", operation: "clean_paths", paths },
       Boolean(options.json),
     );
   });
+
+gitControls
+  .command("conflicts [path]")
+  .description(
+    "inspect active conflicts or one file's base, ours, and theirs evidence",
+  )
+  .option("--json", "print machine-readable JSON")
+  .action(async (path: string | undefined, options: { json?: boolean }) => {
+    await requestGitAction(
+      { action: "conflicts", path },
+      Boolean(options.json),
+    );
+  });
+
+gitControls
+  .command("conflict-editor <path>")
+  .description(
+    "preview terminal handoff to the configured editor for one conflict",
+  )
+  .option("--json", "print machine-readable JSON")
+  .action(async (path: string, options: { json?: boolean }) => {
+    await requestGitAction(
+      { action: "plan", operation: "launch_editor", path },
+      Boolean(options.json),
+    );
+  });
+
+gitControls
+  .command("mergetool [paths...]")
+  .description("preview terminal handoff to the configured Git mergetool")
+  .option("--json", "print machine-readable JSON")
+  .action(async (paths: string[] = [], options: { json?: boolean }) => {
+    await requestGitAction(
+      {
+        action: "plan",
+        operation: "launch_mergetool",
+        paths: paths.length > 0 ? paths : undefined,
+      },
+      Boolean(options.json),
+    );
+  });
+
+for (const action of ["continue", "abort"] as const) {
+  gitControls
+    .command(action)
+    .description(`preview ${action} for the active conflicted Git operation`)
+    .option("--json", "print machine-readable JSON")
+    .action(async (options: { json?: boolean }) => {
+      await requestGitAction(
+        {
+          action: "plan",
+          operation:
+            action === "continue" ? "continue_operation" : "abort_operation",
+        },
+        Boolean(options.json),
+      );
+    });
+}
 
 gitControls
   .command("execute <planId>")
@@ -717,7 +811,7 @@ gitControls
         process.exitCode = 3;
         return;
       }
-      await requestGitAction(
+      const result = await requestGitAction(
         {
           action: "execute",
           planId,
@@ -726,6 +820,7 @@ gitControls
         },
         Boolean(options.json),
       );
+      await runGitHandoff(result, Boolean(options.json));
     },
   );
 
