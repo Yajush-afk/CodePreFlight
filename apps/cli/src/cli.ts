@@ -579,6 +579,127 @@ gitControls
   });
 
 gitControls
+  .command("fetch <remote>")
+  .description("preview an explicit fetch from one configured remote")
+  .option("--json", "print machine-readable JSON")
+  .action(async (remote: string, options: { json?: boolean }) => {
+    await requestGitAction(
+      { action: "plan", operation: "fetch_remote", remote },
+      Boolean(options.json),
+    );
+  });
+
+gitControls
+  .command("pull <remote> <branch>")
+  .description("preview a fast-forward-only pull into the current branch")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (remote: string, branch: string, options: { json?: boolean }) => {
+      await requestGitAction(
+        { action: "plan", operation: "pull_ff", remote, branch },
+        Boolean(options.json),
+      );
+    },
+  );
+
+gitControls
+  .command("push <remote> <branch>")
+  .description("preview a non-force push to an explicit remote branch")
+  .option("--set-upstream", "set the pushed branch as the local upstream")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (
+      remote: string,
+      branch: string,
+      options: { setUpstream?: boolean; json?: boolean },
+    ) => {
+      await requestGitAction(
+        {
+          action: "plan",
+          operation: options.setUpstream ? "push_set_upstream" : "push_branch",
+          remote,
+          branch,
+        },
+        Boolean(options.json),
+      );
+    },
+  );
+
+gitControls
+  .command("force-push <remote> <branch>")
+  .description("preview a force-push bound to the locally known remote OID")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (remote: string, branch: string, options: { json?: boolean }) => {
+      await requestGitAction(
+        { action: "plan", operation: "force_push", remote, branch },
+        Boolean(options.json),
+      );
+    },
+  );
+
+for (const action of ["merge", "rebase"] as const) {
+  gitControls
+    .command(`${action} <revision>`)
+    .description(`preview ${action} against an immutable local commit`)
+    .option("--json", "print machine-readable JSON")
+    .action(async (revision: string, options: { json?: boolean }) => {
+      await requestGitAction(
+        { action: "plan", operation: action, revision },
+        Boolean(options.json),
+      );
+    });
+}
+
+for (const action of ["cherry-pick", "revert"] as const) {
+  gitControls
+    .command(`${action} <revision>`)
+    .description(`preview ${action} of an immutable local commit`)
+    .option("--mainline <parent>", "mainline parent for a merge commit", Number)
+    .option("--json", "print machine-readable JSON")
+    .action(
+      async (
+        revision: string,
+        options: { mainline?: number; json?: boolean },
+      ) => {
+        await requestGitAction(
+          {
+            action: "plan",
+            operation: action === "cherry-pick" ? "cherry_pick" : "revert",
+            revision,
+            mainline: options.mainline,
+          },
+          Boolean(options.json),
+        );
+      },
+    );
+}
+
+gitControls
+  .command("reset <mode> <revision>")
+  .description("preview a soft, mixed, or hard reset to an immutable commit")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (mode: string, revision: string, options: { json?: boolean }) => {
+      await requestGitAction(
+        { action: "plan", operation: "reset", mode, revision },
+        Boolean(options.json),
+      );
+    },
+  );
+
+gitControls
+  .command("clean <paths...>")
+  .description("preview removal of selected untracked or ignored files")
+  .option("--json", "print machine-readable JSON")
+  .action(async (paths: string[], options: { json?: boolean }) => {
+    await requestGitAction(
+      { action: "plan", operation: "clean_paths", paths },
+      Boolean(options.json),
+    );
+  });
+
+gitControls
   .command("execute <planId>")
   .description("execute an unchanged stored Git preview")
   .option("--yes", "approve the exact stored plan")

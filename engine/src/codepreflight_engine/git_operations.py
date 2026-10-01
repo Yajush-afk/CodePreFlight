@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from .errors import CodePreflightError
 from .finding_ledger import FindingLedger
 from .git import GitRunner
+from .git_remote_history import RemoteHistoryWorkflow
 from .models import (
     ConflictState,
     GitConfirmation,
@@ -60,6 +61,9 @@ class GitOperationService:
             return self._plan_branch(action, parameters)  # type: ignore[arg-type]
         if action in {"stash_create", "stash_apply", "stash_pop", "stash_drop"}:
             return self._plan_stash(action, parameters)  # type: ignore[arg-type]
+        remote_history = RemoteHistoryWorkflow(self.root)
+        if remote_history.supports(action):
+            return self._plan_remote_history(remote_history, action, parameters)
         raise CodePreflightError(
             "unsupported_git_operation",
             "Unsupported Git operation",
@@ -466,6 +470,34 @@ class GitOperationService:
             limitations=["Ignored paths are never included"],
         )
 
+    def _plan_remote_history(
+        self,
+        workflow: RemoteHistoryWorkflow,
+        action: str,
+        parameters: dict[str, Any],
+    ) -> GitOperationPlan:
+        draft = workflow.plan(action, parameters)
+        paths = self._paths(draft.paths) if draft.paths else []
+        return self._save_plan(
+            action=draft.action,
+            command=workflow.command(draft.arguments),
+            paths=paths,
+            hunks=[],
+            parameters=draft.parameters,
+            patch=None,
+            risk=draft.risk,
+            confirmation=draft.confirmation,
+            preview=draft.preview,
+            effects=draft.effects,
+            limitations=draft.limitations,
+            hook_involvement=draft.hook_involvement,
+            editor_involvement=draft.editor_involvement,
+            credential_helper_involvement=draft.credential_helper_involvement,
+            refs=draft.refs,
+            source=draft.source,
+            destination=draft.destination,
+        )
+
     def _save_plan(
         self,
         *,
@@ -481,6 +513,8 @@ class GitOperationService:
         effects: list[str],
         limitations: list[str],
         hook_involvement: bool = False,
+        editor_involvement: bool = False,
+        credential_helper_involvement: bool = False,
         refs: dict[str, str] | None = None,
         source: str | None = None,
         destination: str | None = None,
@@ -507,6 +541,8 @@ class GitOperationService:
             destination=destination,
             expected_effects=effects,
             hook_involvement=hook_involvement,
+            editor_involvement=editor_involvement,
+            credential_helper_involvement=credential_helper_involvement,
             recovery_limitations=limitations,
             preview=preview,
             expires_at=expires.isoformat(),
@@ -572,6 +608,9 @@ class GitOperationService:
             return None
         if plan.action in {"stash_create", "stash_apply", "stash_pop", "stash_drop"}:
             return self._run_stash_action(git, plan, parameters)
+        workflow = RemoteHistoryWorkflow(self.root)
+        if workflow.supports(plan.action):
+            return self._run_remote_history(workflow, plan, parameters)
         raise CodePreflightError(
             "unsupported_git_operation", f"Cannot execute action: {plan.action}"
         )
@@ -595,6 +634,28 @@ class GitOperationService:
         else:
             return self._commit(git, plan.selected_paths, parameters)
         return None
+
+    def _run_remote_history(
+        self,
+        workflow: RemoteHistoryWorkflow,
+        plan: GitOperationPlan,
+        parameters: dict[str, Any],
+    ) -> str | GitOperationResult | None:
+        outcome = workflow.execute(plan.action, parameters)
+        if outcome.status != "completed":
+            return GitOperationResult(
+                plan_id=plan.id,
+                action=plan.action,
+                status=outcome.status,
+                message=outcome.message,
+                exit_code=outcome.exit_code,
+                repository=RepositoryInspector().inspect(self.root),
+                conflict=outcome.conflict,
+            )
+        if not outcome.changed_paths:
+            return None
+        reason = "working_tree_cleaned" if plan.action == "clean_paths" else "history_changed"
+        return self._mark_findings_changed(outcome.changed_paths, reason)
 
     def _run_branch_action(self, git: GitRunner, action: str, parameters: dict[str, Any]) -> None:
         if action == "create_branch":
@@ -756,6 +817,9 @@ class GitOperationService:
         expected = {
             "discard_worktree": "DISCARD",
             "stash_drop": "DROP",
+            "force_push": "FORCE PUSH",
+            "reset": "RESET",
+            "clean_paths": "CLEAN",
         }.get(plan.action, plan.action.upper())
         if payload.get("confirmation") != expected:
             raise CodePreflightError(
@@ -987,6 +1051,7 @@ class GitOperationService:
         index = git.run("ls-files", "-s", "-z").stdout
         status = git.run("status", "--porcelain=v2", "-z", "--untracked-files=all").stdout
         worktree = git.run("diff", "--binary", "--no-ext-diff").stdout
+        local_config = git.run("config", "--local", "--null", "--list").stdout
         selected = {path: self._path_digest(path) for path in paths}
         current_refs = {
             ref: git.run("rev-parse", "--verify", ref, check=False).stdout.strip()
@@ -996,6 +1061,7 @@ class GitOperationService:
             "head": head,
             "index": self._digest(index),
             "worktree": self._digest(worktree + "\0" + status),
+            "config": self._digest(local_config),
             "selected": self._digest(json.dumps(selected, sort_keys=True)),
             "refs": self._digest(json.dumps(current_refs, sort_keys=True)),
         }
