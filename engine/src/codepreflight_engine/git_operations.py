@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from .errors import CodePreflightError
 from .finding_ledger import FindingLedger
 from .git import GitRunner
+from .git_conflicts import ConflictWorkflow
 from .git_remote_history import RemoteHistoryWorkflow
 from .models import (
     ConflictState,
@@ -64,6 +65,9 @@ class GitOperationService:
         remote_history = RemoteHistoryWorkflow(self.root)
         if remote_history.supports(action):
             return self._plan_remote_history(remote_history, action, parameters)
+        conflicts = ConflictWorkflow(self.root)
+        if conflicts.supports(action):
+            return self._plan_conflict(conflicts, action, parameters)
         raise CodePreflightError(
             "unsupported_git_operation",
             "Unsupported Git operation",
@@ -142,6 +146,9 @@ class GitOperationService:
                     }
                 )
         return {"items": items}
+
+    def conflicts(self, path: str | None = None) -> dict[str, Any]:
+        return ConflictWorkflow(self.root).inspect(path).model_dump(mode="json")
 
     def _plan_files(self, action: FileAction, parameters: dict[str, Any]) -> GitOperationPlan:
         paths = self._paths(parameters.get("paths"))
@@ -498,6 +505,29 @@ class GitOperationService:
             destination=draft.destination,
         )
 
+    def _plan_conflict(
+        self,
+        workflow: ConflictWorkflow,
+        action: str,
+        parameters: dict[str, Any],
+    ) -> GitOperationPlan:
+        draft = workflow.plan(action, parameters)
+        paths = self._paths(draft.paths) if draft.paths else []
+        return self._save_plan(
+            action=draft.action,
+            command=workflow.command_text(draft.command),
+            paths=paths,
+            hunks=[],
+            parameters=draft.parameters,
+            patch=None,
+            risk=draft.risk,
+            confirmation=GitConfirmation.EXPLICIT,
+            preview=draft.preview,
+            effects=draft.effects,
+            limitations=draft.limitations,
+            editor_involvement=draft.editor_involvement,
+        )
+
     def _save_plan(
         self,
         *,
@@ -611,6 +641,9 @@ class GitOperationService:
         workflow = RemoteHistoryWorkflow(self.root)
         if workflow.supports(plan.action):
             return self._run_remote_history(workflow, plan, parameters)
+        conflicts = ConflictWorkflow(self.root)
+        if conflicts.supports(plan.action):
+            return conflicts.execute(plan.action, parameters, plan.id)
         raise CodePreflightError(
             "unsupported_git_operation", f"Cannot execute action: {plan.action}"
         )
@@ -1062,6 +1095,7 @@ class GitOperationService:
             "index": self._digest(index),
             "worktree": self._digest(worktree + "\0" + status),
             "config": self._digest(local_config),
+            "operation": self._operation_digest(),
             "selected": self._digest(json.dumps(selected, sort_keys=True)),
             "refs": self._digest(json.dumps(current_refs, sort_keys=True)),
         }
@@ -1078,6 +1112,32 @@ class GitOperationService:
         with path.open("rb") as handle:
             while chunk := handle.read(1_048_576):
                 digest.update(chunk)
+        return digest.hexdigest()
+
+    def _operation_digest(self) -> str:
+        git_dir = Path(GitRunner(self.root).run("rev-parse", "--absolute-git-dir").stdout.strip())
+        markers = (
+            git_dir / "MERGE_HEAD",
+            git_dir / "CHERRY_PICK_HEAD",
+            git_dir / "REVERT_HEAD",
+            git_dir / "rebase-merge",
+            git_dir / "rebase-apply",
+        )
+        digest = hashlib.sha256()
+        remaining = 1_000_000
+        for marker in markers:
+            candidates = [marker] if not marker.is_dir() else sorted(marker.rglob("*"))[:1_000]
+            for candidate in candidates:
+                if remaining <= 0 or candidate.is_dir() or not candidate.exists():
+                    continue
+                relative = candidate.relative_to(git_dir).as_posix()
+                if candidate.is_symlink():
+                    content = os.readlink(candidate).encode()
+                else:
+                    with candidate.open("rb") as handle:
+                        content = handle.read(remaining)
+                digest.update(relative.encode() + b"\0" + content + b"\0")
+                remaining -= len(content)
         return digest.hexdigest()
 
     def _fingerprint(
