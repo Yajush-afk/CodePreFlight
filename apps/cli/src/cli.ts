@@ -457,6 +457,128 @@ gitControls
   });
 
 gitControls
+  .command("branch-create <branch>")
+  .description("preview creating a local branch without switching to it")
+  .option("--start <revision>", "start point, resolved to an immutable commit")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (branch: string, options: { start?: string; json?: boolean }) => {
+      await requestGitAction(
+        {
+          action: "plan",
+          operation: "create_branch",
+          branch,
+          startPoint: options.start,
+        },
+        Boolean(options.json),
+      );
+    },
+  );
+
+gitControls
+  .command("branch-switch <branch>")
+  .description("preview switching to an existing local branch")
+  .option("--json", "print machine-readable JSON")
+  .action(async (branch: string, options: { json?: boolean }) => {
+    await requestGitAction(
+      { action: "plan", operation: "switch_branch", branch },
+      Boolean(options.json),
+    );
+  });
+
+gitControls
+  .command("branch-rename <source> <destination>")
+  .description("preview renaming a local branch")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (
+      source: string,
+      destination: string,
+      options: { json?: boolean },
+    ) => {
+      await requestGitAction(
+        {
+          action: "plan",
+          operation: "rename_branch",
+          source,
+          destination,
+        },
+        Boolean(options.json),
+      );
+    },
+  );
+
+gitControls
+  .command("branch-delete <branch>")
+  .description("preview safely deleting a merged local branch")
+  .option("--json", "print machine-readable JSON")
+  .action(async (branch: string, options: { json?: boolean }) => {
+    await requestGitAction(
+      { action: "plan", operation: "delete_branch", branch },
+      Boolean(options.json),
+    );
+  });
+
+gitControls
+  .command("stashes [stash]")
+  .description("list stashes or inspect one stash patch without mutation")
+  .option("--json", "print machine-readable JSON")
+  .action(async (stash: string | undefined, options: { json?: boolean }) => {
+    await requestGitAction({ action: "stashes", stash }, Boolean(options.json));
+  });
+
+gitControls
+  .command("stash <paths...>")
+  .description("preview stashing selected changed paths")
+  .option("--message <message>", "stash description")
+  .option("--json", "print machine-readable JSON")
+  .action(
+    async (paths: string[], options: { message?: string; json?: boolean }) => {
+      await requestGitAction(
+        {
+          action: "plan",
+          operation: "stash_create",
+          paths,
+          message: options.message,
+        },
+        Boolean(options.json),
+      );
+    },
+  );
+
+for (const action of ["stash-apply", "stash-pop"] as const) {
+  gitControls
+    .command(`${action} <stash>`)
+    .description(`preview ${action.replace("-", " ")} without hidden recovery`)
+    .option("--index", "restore the stashed index state")
+    .option("--json", "print machine-readable JSON")
+    .action(
+      async (stash: string, options: { index?: boolean; json?: boolean }) => {
+        await requestGitAction(
+          {
+            action: "plan",
+            operation: action === "stash-apply" ? "stash_apply" : "stash_pop",
+            stash,
+            reinstateIndex: Boolean(options.index),
+          },
+          Boolean(options.json),
+        );
+      },
+    );
+}
+
+gitControls
+  .command("stash-drop <stash>")
+  .description("preview irreversibly dropping one stash")
+  .option("--json", "print machine-readable JSON")
+  .action(async (stash: string, options: { json?: boolean }) => {
+    await requestGitAction(
+      { action: "plan", operation: "stash_drop", stash },
+      Boolean(options.json),
+    );
+  });
+
+gitControls
   .command("execute <planId>")
   .description("execute an unchanged stored Git preview")
   .option("--yes", "approve the exact stored plan")
