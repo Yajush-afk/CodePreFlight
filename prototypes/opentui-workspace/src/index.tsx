@@ -1,7 +1,12 @@
 // PROTOTYPE: three workspace structures, switchable with 1/2/3 or arrow keys.
 import { createCliRenderer } from "@opentui/core";
-import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
-import { useState } from "react";
+import {
+  createRoot,
+  useKeyboard,
+  useRenderer,
+  useTerminalDimensions,
+} from "@opentui/react";
+import { useRef, useState, type ReactNode } from "react";
 
 const palette = {
   accent: "#5eead4",
@@ -26,7 +31,7 @@ const commits = [
   "╰─● 6d57122  Render real commit topology",
 ];
 
-const messages = [
+const initialMessages = [
   { who: "You", body: "Review the working tree before I commit." },
   {
     who: "Preflight",
@@ -46,7 +51,7 @@ function Title({ children }: { children: string }) {
   );
 }
 
-function Header() {
+function Header({ compact = false }: { compact?: boolean }) {
   return (
     <box
       height={3}
@@ -57,7 +62,7 @@ function Header() {
       paddingRight={1}
       justifyContent="space-between"
     >
-      <text fg={palette.muted}>~/my_repo/code-preflight</text>
+      {!compact && <text fg={palette.muted}>~/my_repo/code-preflight</text>}
       <text fg={palette.accent}>
         <strong>◇ CODEPREFLIGHT</strong>
       </text>
@@ -97,9 +102,7 @@ function RepositorySummary({ compact = false }: { compact?: boolean }) {
         <span fg={palette.low}>? 1 untracked</span>{" "}
         <span fg={palette.success}>! 0 conflicts</span>
       </text>
-      {!compact && (
-        <text fg={palette.accent}>Next: review staged changes</text>
-      )}
+      {!compact && <text fg={palette.accent}>Next: review staged changes</text>}
     </box>
   );
 }
@@ -185,7 +188,21 @@ function FindingCard() {
   );
 }
 
-function AgentPanel({ roomy = false }: { roomy?: boolean }) {
+function AgentPanel({
+  roomy = false,
+  messages,
+  composerFocused,
+  draft,
+  onDraftChange,
+  onSubmit,
+}: {
+  roomy?: boolean;
+  messages: Array<{ who: string; body: string }>;
+  composerFocused: boolean;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onSubmit: (value: string) => void;
+}) {
   return (
     <box
       flexDirection="column"
@@ -229,7 +246,14 @@ function AgentPanel({ roomy = false }: { roomy?: boolean }) {
         borderColor={palette.accent}
         paddingLeft={1}
       >
-        <input placeholder="Ask about this repository, or type /" focused />
+        <input
+          id="agent-composer"
+          placeholder="Ask about this repository, or type /"
+          focused={composerFocused}
+          value={draft}
+          onInput={onDraftChange}
+          onSubmit={() => onSubmit(draft)}
+        />
       </box>
       <box height={1} justifyContent="space-between">
         <text fg={palette.muted}>gpt-5.6-luna · medium · manual</text>
@@ -265,7 +289,7 @@ function History({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function Cockpit() {
+function Cockpit(props: AgentPanelProps) {
   return (
     <box flexDirection="row" flexGrow={1} gap={1}>
       <box width="25%" flexDirection="column" gap={1}>
@@ -273,7 +297,7 @@ function Cockpit() {
         <Findings />
       </box>
       <box width="55%">
-        <AgentPanel />
+        <AgentPanel {...props} />
       </box>
       <box width="20%">
         <History />
@@ -282,7 +306,7 @@ function Cockpit() {
   );
 }
 
-function AgentFocus() {
+function AgentFocus(props: AgentPanelProps) {
   return (
     <box flexDirection="row" flexGrow={1} gap={1}>
       <box width="20%" flexDirection="column" gap={1}>
@@ -290,7 +314,7 @@ function AgentFocus() {
         <Changes />
       </box>
       <box width="60%">
-        <AgentPanel roomy />
+        <AgentPanel roomy {...props} />
       </box>
       <box width="20%" flexDirection="column" gap={1}>
         <Findings compact />
@@ -300,7 +324,7 @@ function AgentFocus() {
   );
 }
 
-function WorkQueue() {
+function WorkQueue(props: AgentPanelProps) {
   return (
     <box flexDirection="column" flexGrow={1} gap={1}>
       <box height="62%" flexDirection="row" gap={1}>
@@ -309,7 +333,7 @@ function WorkQueue() {
           <Changes />
         </box>
         <box width="66%">
-          <AgentPanel roomy />
+          <AgentPanel roomy {...props} />
         </box>
       </box>
       <box height="38%" flexDirection="row" gap={1}>
@@ -324,23 +348,183 @@ function WorkQueue() {
   );
 }
 
+type AgentPanelProps = Parameters<typeof AgentPanel>[0];
+
 const variants = [
-  { name: "Cockpit", view: <Cockpit /> },
-  { name: "Agent focus", view: <AgentFocus /> },
-  { name: "Work queue", view: <WorkQueue /> },
+  { name: "Cockpit", render: Cockpit },
+  { name: "Agent focus", render: AgentFocus },
+  { name: "Work queue", render: WorkQueue },
 ];
+
+type NarrowView = "agent" | "repository" | "changes" | "findings";
+
+function NarrowWorkspace({
+  view,
+  agentPanelProps,
+}: {
+  view: NarrowView;
+  agentPanelProps: AgentPanelProps;
+}) {
+  const selectedView = {
+    agent: <AgentPanel roomy {...agentPanelProps} />,
+    repository: <RepositorySummary />,
+    changes: <Changes />,
+    findings: <Findings />,
+  }[view];
+
+  return (
+    <box flexDirection="column" flexGrow={1} gap={1}>
+      <box height={1}>
+        <text>
+          <span fg={palette.current}>feature/ui</span> →{" "}
+          <span fg={palette.base}>main</span>
+          {"  "}
+          <span fg={palette.success}>+2</span>{" "}
+          <span fg={palette.medium}>~1</span> <span fg={palette.low}>?1</span>
+          {"  "}
+          <span fg={palette.accent}>{view.toUpperCase()}</span>
+        </text>
+      </box>
+      {selectedView}
+    </box>
+  );
+}
+
+function CompactWorkspace({ children }: { children: ReactNode }) {
+  return (
+    <box flexDirection="row" flexGrow={1} gap={1}>
+      <box width="28%" flexDirection="column" gap={1}>
+        <RepositorySummary compact />
+        <Changes />
+        <Findings compact />
+      </box>
+      <box width="72%">{children}</box>
+    </box>
+  );
+}
 
 function App() {
   const renderer = useRenderer();
+  const { width, height } = useTerminalDimensions();
+  const compactMode = width < 100 || height < 32;
   const [variant, setVariant] = useState(0);
+  const [narrowView, setNarrowView] = useState<NarrowView>("agent");
+  const [composerFocused, setComposerFocused] = useState(true);
+  const composerFocusedRef = useRef(true);
+  const [draft, setDraft] = useState("");
+  const [messages, setMessages] = useState(initialMessages);
+  const updateComposerFocus = (focused: boolean) => {
+    composerFocusedRef.current = focused;
+    setComposerFocused(focused);
+  };
+
+  const submitMessage = (value: string) => {
+    const question = value.trim();
+    if (!question) return;
+    setMessages((current) => [
+      ...current,
+      { who: "You", body: question },
+      {
+        who: "Preflight",
+        body: "Prototype preview only: no repository or provider request was made.",
+      },
+    ]);
+    setDraft("");
+  };
+
   useKeyboard((key) => {
-    if (key.name === "escape" || key.name === "q") renderer.destroy();
-    if (key.name === "left")
+    if (composerFocusedRef.current) {
+      if (key.name === "escape") {
+        if (draft) setDraft("");
+        key.preventDefault();
+        key.stopPropagation();
+        return;
+      }
+      if (key.name === "tab") {
+        const focused = renderer.currentFocusedRenderable;
+        if (focused?.id === "agent-composer") {
+          renderer.blurRenderable(focused);
+        }
+        updateComposerFocus(false);
+        key.preventDefault();
+        key.stopPropagation();
+      } else if (key.ctrl && key.name === "q") {
+        key.preventDefault();
+        key.stopPropagation();
+        renderer.destroy();
+      }
+      return;
+    }
+    if (key.name === "tab") {
+      updateComposerFocus(true);
+      setNarrowView("agent");
+      key.preventDefault();
+      key.stopPropagation();
+      return;
+    }
+    if (key.name === "escape" || key.name === "q") {
+      key.preventDefault();
+      key.stopPropagation();
+      renderer.destroy();
+      return;
+    }
+    if (key.name === "left") {
       setVariant((value) => (value + variants.length - 1) % variants.length);
-    if (key.name === "right")
+      key.preventDefault();
+      key.stopPropagation();
+      return;
+    }
+    if (key.name === "right") {
       setVariant((value) => (value + 1) % variants.length);
-    if (["1", "2", "3"].includes(key.name)) setVariant(Number(key.name) - 1);
+      key.preventDefault();
+      key.stopPropagation();
+      return;
+    }
+    if (["1", "2", "3"].includes(key.name)) {
+      setVariant(Number(key.name) - 1);
+      key.preventDefault();
+      key.stopPropagation();
+      return;
+    }
+    if (compactMode && ["a", "r", "c", "f"].includes(key.name)) {
+      const views: Record<string, NarrowView> = {
+        a: "agent",
+        r: "repository",
+        c: "changes",
+        f: "findings",
+      };
+      setNarrowView(views[key.name]);
+      updateComposerFocus(false);
+      key.preventDefault();
+      key.stopPropagation();
+    }
   });
+
+  const agentPanelProps: AgentPanelProps = {
+    messages,
+    composerFocused,
+    draft,
+    onDraftChange: setDraft,
+    onSubmit: submitMessage,
+  };
+  const selectedVariant = variants[variant];
+  const keyboardHelp = compactMode
+    ? composerFocused
+      ? "Tab panels · Ctrl+C exits"
+      : "1/2/3 layout · A/R/C/F panels · Tab input · q exits"
+    : composerFocused
+      ? "Tab switches layout keys · Ctrl+C exits"
+      : "1/2/3 or ←/→ layout · Tab composer · q exits";
+  const workspace = compactMode ? (
+    <NarrowWorkspace view={narrowView} agentPanelProps={agentPanelProps} />
+  ) : width < 140 ? (
+    <CompactWorkspace>
+      <AgentPanel roomy {...agentPanelProps} />
+    </CompactWorkspace>
+  ) : (
+    selectedVariant.render(agentPanelProps)
+  );
+
   return (
     <box
       flexDirection="column"
@@ -350,17 +534,17 @@ function App() {
       gap={1}
       backgroundColor={palette.panel}
     >
-      <Header />
-      {variants[variant].view}
+      <Header compact={compactMode} />
+      {workspace}
       <box height={1} justifyContent="center">
         <text fg={palette.muted}>
           ←{" "}
           <span fg={palette.accent}>
             <strong>
-              {variant + 1} · {variants[variant].name}
+              {variant + 1} · {selectedVariant.name}
             </strong>
           </span>{" "}
-          → 1/2/3 switch · q exit · prototype data only
+          → {keyboardHelp} · prototype data only
         </text>
       </box>
     </box>
