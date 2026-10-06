@@ -434,7 +434,13 @@ function App() {
 
   useKeyboard((key) => {
     if (composerFocusedRef.current) {
-      if (key.name === "tab" || key.name === "escape") {
+      if (key.name === "escape") {
+        if (draft) setDraft("");
+        key.preventDefault();
+        key.stopPropagation();
+        return;
+      }
+      if (key.name === "tab") {
         const focused = renderer.currentFocusedRenderable;
         if (focused?.id === "agent-composer") {
           renderer.blurRenderable(focused);
