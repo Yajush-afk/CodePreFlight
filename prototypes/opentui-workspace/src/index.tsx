@@ -4,16 +4,16 @@ import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { useState } from "react";
 
 const palette = {
-  accent: "#68d8d6",
-  base: "#7699d4",
-  current: "#c084fc",
-  critical: "#ff5d73",
-  high: "#ff9f43",
-  medium: "#f6c85f",
-  low: "#62a8ea",
-  success: "#5bd68a",
-  muted: "#7d8590",
-  border: "#4b5563",
+  accent: "#5eead4",
+  base: "#7cb7ff",
+  current: "#d8a2ff",
+  critical: "#ff667a",
+  high: "#ff9f5a",
+  medium: "#ffe066",
+  low: "#70b7ff",
+  success: "#75e69a",
+  muted: "#a6b0bf",
+  border: "#758296",
   panel: "#11151c",
 };
 
@@ -77,25 +77,28 @@ function RepositorySummary({ compact = false }: { compact?: boolean }) {
       border
       borderStyle="rounded"
       borderColor={palette.border}
-      title=" Repository "
+      title=" Repository summary "
       padding={1}
       flexGrow={1}
     >
+      <text fg={palette.accent}>
+        <strong>code-preflight</strong>
+      </text>
       <text>
         <span fg={palette.current}>feature/ui</span> →{" "}
         <span fg={palette.base}>main</span>
       </text>
       <text fg={palette.muted}>2 ahead · upstream current</text>
       <text>
-        <span fg={palette.success}>● 2 staged</span>{" "}
-        <span fg={palette.medium}>● 1 changed</span>
+        <span fg={palette.success}>+ 2 staged</span>{" "}
+        <span fg={palette.medium}>~ 1 modified</span>
       </text>
       <text>
-        <span fg={palette.low}>● 1 untracked</span>{" "}
-        <span fg={palette.success}>0 conflicts</span>
+        <span fg={palette.low}>? 1 untracked</span>{" "}
+        <span fg={palette.success}>! 0 conflicts</span>
       </text>
       {!compact && (
-        <text fg={palette.muted}>Next: review the staged change set</text>
+        <text fg={palette.accent}>Next: review staged changes</text>
       )}
     </box>
   );
@@ -114,11 +117,11 @@ function Findings({ compact = false }: { compact?: boolean }) {
     >
       <text>
         <span fg={palette.critical}>◆ CRITICAL 0</span>{" "}
-        <span fg={palette.high}>◆ HIGH 1</span>
+        <span fg={palette.high}>▲ HIGH 1</span>
       </text>
       <text>
-        <span fg={palette.medium}>◆ MEDIUM 1</span>{" "}
-        <span fg={palette.low}>◆ LOW 0</span>
+        <span fg={palette.medium}>● MEDIUM 1</span>{" "}
+        <span fg={palette.low}>○ LOW 0</span>
       </text>
       <text fg={palette.high}>H1 Token refresh accepts expired sessions</text>
       {!compact && (
@@ -282,14 +285,14 @@ function Cockpit() {
 function AgentFocus() {
   return (
     <box flexDirection="row" flexGrow={1} gap={1}>
-      <box width="17%" flexDirection="column" gap={1}>
+      <box width="20%" flexDirection="column" gap={1}>
         <RepositorySummary compact />
         <Changes />
       </box>
-      <box width="66%">
+      <box width="60%">
         <AgentPanel roomy />
       </box>
-      <box width="17%" flexDirection="column" gap={1}>
+      <box width="20%" flexDirection="column" gap={1}>
         <Findings compact />
         <History compact />
       </box>
