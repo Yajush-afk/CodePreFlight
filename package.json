@@ -4,7 +4,8 @@
   "private": true,
   "description": "Local-first Git workflow and AI code review tool",
   "workspaces": [
-    "apps/*"
+    "apps/*",
+    "prototypes/*"
   ],
   "scripts": {
     "build": "npm run build --workspace @codepreflight/cli",
@@ -12,9 +13,13 @@
     "protocol:check": "uv run --project engine python scripts/generate_protocol.py --check",
     "protocol:generate": "uv run --project engine python scripts/generate_protocol.py",
     "test": "npm run test --workspace @codepreflight/cli",
-    "preflight": "npm run dev --workspace @codepreflight/cli --"
+    "preflight": "npm run dev --workspace @codepreflight/cli --",
+    "prototype:workspace": "npx bun run --cwd prototypes/opentui-workspace start"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "bun": "^1.4.2"
   }
 }
